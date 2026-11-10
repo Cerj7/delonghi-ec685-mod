@@ -45,8 +45,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // Tt = термоблок / вихід, Tw = вода в бачку
 #define THERMO_SO   12
 #define THERMO_SCK  13
-#define THERMO_CS_T 11   // Tt
-#define THERMO_CS_W A2   // Tw
+#define THERMO_CS_T A2   // Tt
+#define THERMO_CS_W 11   // Tw
 
 MAX6675 thermoT(THERMO_SCK, THERMO_CS_T, THERMO_SO);
 MAX6675 thermoW(THERMO_SCK, THERMO_CS_W, THERMO_SO);

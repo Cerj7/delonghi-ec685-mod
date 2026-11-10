@@ -1,24 +1,27 @@
 // Debug Repeater — діагностичний скетч для DeLonghi EC685
 //
-// Мета (див. debug-repeater.md):
-//   1. Зчитувати сигнал на оптопару SSR термоблока (штатний SDD)
-//   2. Повторювати його на штатне SSR (passthrough), щоб кавоварка працювала як завжди
-//   3. Логувати імпульси лічильника води
-//   4. Логувати температуру з термопари MAX6675
+// Мета (див. debug-repeater.md / docs/debug-repeater.md):
+//   1. Зчитувати штатний SDD термоблока і повторювати на SSR (passthrough)
+//   2. Зчитувати штатний сигнал помпи (A3) і повторювати через AC-диммер (D3)
+//   3. Логувати імпульси лічильника води та температуру MAX6675
+//   4. У реальному часі показувати натискання кнопок і відкриття ручки пари
 //
 // Підключення: Arduino Nano ↔ ПК по USB (Serial 115200).
-// Формат логу (CSV) зручний для Serial Plotter / Excel / Python:
-//   t_ms,sdd,heater,flow_pulses,flow_hz,temp_c,btn1,btn2,btn3,steam
+// Формат CSV:
+//   t_ms,sdd,heater,pump_in,pump_out,flow_pulses,flow_hz,temp_c,btn1,btn2,btn3,steam
+// Події кнопок/пари — окремі рядки `# EVT ...` одразу після зміни стану.
 //
 // Бібліотеки (Менеджер бібліотек Arduino IDE):
 //   1. Adafruit GFX Library
 //   2. Adafruit SSD1306
 //   3. max6675 (by Adafruit)
+//   4. AC_Dimmer (zip з https://github.com/serhiy23412/AC_dimmer-dmr-0.2.1)
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <max6675.h>
+#include <AC_Dimmer.h>
 
 // --- OLED 128x32 ---
 #define SCREEN_WIDTH 128
@@ -33,6 +36,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 
 // --- Піни (див. readme.md) ---
+// Диммер: Zero-Cross жорстко D2 у бібліотеці; GATE — D3
+#define DIMMER_GATE_PIN  3
 #define HEATER_PIN       4  // вихід на оптопару SSR термоблока
 #define FLOWMETER_PIN    5  // імпульси лічильника води
 #define SDD_PIN          6  // вхід штатного сигналу SDD (через оптопару)
@@ -40,11 +45,14 @@ MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 #define BTN_2CUP_PIN     8
 #define BTN_STEAM_PIN    9
 #define STEAM_HANDLE_PIN 10
+#define PUMP_CTRL_PIN    A3 // вхід штатного сигналу помпи (через оптопару)
+
+#define PUMP_DIMMER 0  // канал AC_Dimmer
 
 // --- Періоди ---
-const unsigned long LOG_INTERVAL_MS = 20;    // частота рядків у Serial (~50 Гц)
+const unsigned long LOG_INTERVAL_MS = 20;    // частота CSV (~50 Гц)
 const unsigned long TEMP_INTERVAL_MS = 250;  // MAX6675 потребує ≥220 мс на конверсію
-const unsigned long OLED_INTERVAL_MS = 200;
+const unsigned long OLED_INTERVAL_MS = 100;  // швидше оновлення кнопок на екрані
 const unsigned long FLOW_WINDOW_MS = 200;    // вікно для розрахунку частоти імпульсів
 
 // INPUT_PULLUP + оптопара на GND → активний сигнал = LOW
@@ -63,6 +71,14 @@ float flowHz = 0.0;
 
 uint8_t lastSdd = 0;
 uint8_t lastHeater = 0;
+uint8_t lastPumpIn = 0;
+uint8_t lastPumpOut = 0;
+
+uint8_t prevBtn1 = 0;
+uint8_t prevBtn2 = 0;
+uint8_t prevBtn3 = 0;
+uint8_t prevSteam = 0;
+bool btnStateInited = false;
 
 bool isActive(uint8_t pin) {
   const int raw = digitalRead(pin);
@@ -70,7 +86,7 @@ bool isActive(uint8_t pin) {
 }
 
 // Pin Change Interrupt на D5 (PCINT21 / PCMSK2 bit 5).
-// На Nano зовнішні INT лише на D2/D3; D2 зайнятий диммером у фінальній прошивці.
+// На Nano зовнішні INT лише на D2/D3; D2 зайнятий Zero-Cross диммера.
 ISR(PCINT2_vect) {
   static uint8_t lastState = HIGH;
   const uint8_t state = digitalRead(FLOWMETER_PIN);
@@ -84,7 +100,6 @@ ISR(PCINT2_vect) {
 
 void setupFlowmeterInterrupt() {
   pinMode(FLOWMETER_PIN, INPUT_PULLUP);
-  // увімкнути PCINT для PORTD (D0–D7), лише біт D5
   PCICR |= (1 << PCIE2);
   PCMSK2 |= (1 << PCINT21);
 }
@@ -112,17 +127,100 @@ void passThroughHeater() {
   lastHeater = sddOn ? 1 : 0;
 }
 
+void passThroughPump() {
+  // Штатний сигнал помпи → 100% або 0% через диммер (повний passthrough ON/OFF)
+  const bool pumpOn = isActive(PUMP_CTRL_PIN);
+  Dimm_value(PUMP_DIMMER, pumpOn ? 255 : 0);
+  lastPumpIn = pumpOn ? 1 : 0;
+  lastPumpOut = pumpOn ? 1 : 0;
+}
+
+void printBtnState(uint8_t btn1, uint8_t btn2, uint8_t btn3, uint8_t steam) {
+  Serial.print(F("1cup="));
+  Serial.print(btn1 ? F("ON") : F("off"));
+  Serial.print(F(" 2cup="));
+  Serial.print(btn2 ? F("ON") : F("off"));
+  Serial.print(F(" steam_btn="));
+  Serial.print(btn3 ? F("ON") : F("off"));
+  Serial.print(F(" steam_handle="));
+  Serial.print(steam ? F("OPEN") : F("closed"));
+}
+
+void logControlEvents(unsigned long now) {
+  const uint8_t btn1 = isActive(BTN_1CUP_PIN) ? 1 : 0;
+  const uint8_t btn2 = isActive(BTN_2CUP_PIN) ? 1 : 0;
+  const uint8_t btn3 = isActive(BTN_STEAM_PIN) ? 1 : 0;
+  const uint8_t steam = isActive(STEAM_HANDLE_PIN) ? 1 : 0;
+
+  if (!btnStateInited) {
+    prevBtn1 = btn1;
+    prevBtn2 = btn2;
+    prevBtn3 = btn3;
+    prevSteam = steam;
+    btnStateInited = true;
+
+    Serial.print(F("# EVT "));
+    Serial.print(now);
+    Serial.print(F(" INIT "));
+    printBtnState(btn1, btn2, btn3, steam);
+    Serial.println();
+    return;
+  }
+
+  if (btn1 == prevBtn1 && btn2 == prevBtn2 && btn3 == prevBtn3 && steam == prevSteam) {
+    return;
+  }
+
+  Serial.print(F("# EVT "));
+  Serial.print(now);
+  Serial.print(' ');
+
+  if (btn1 != prevBtn1) {
+    Serial.print(F("1CUP "));
+    Serial.print(btn1 ? F("PRESS") : F("release"));
+    Serial.print(' ');
+  }
+  if (btn2 != prevBtn2) {
+    Serial.print(F("2CUP "));
+    Serial.print(btn2 ? F("PRESS") : F("release"));
+    Serial.print(' ');
+  }
+  if (btn3 != prevBtn3) {
+    Serial.print(F("STEAM_BTN "));
+    Serial.print(btn3 ? F("PRESS") : F("release"));
+    Serial.print(' ');
+  }
+  if (steam != prevSteam) {
+    Serial.print(F("STEAM_HANDLE "));
+    Serial.print(steam ? F("OPEN") : F("CLOSE"));
+    Serial.print(' ');
+  }
+
+  Serial.print(F("| "));
+  printBtnState(btn1, btn2, btn3, steam);
+  Serial.println();
+
+  prevBtn1 = btn1;
+  prevBtn2 = btn2;
+  prevBtn3 = btn3;
+  prevSteam = steam;
+}
+
 void logCsvLine(unsigned long now) {
   noInterrupts();
   const unsigned long pulses = flowPulsesTotal;
   interrupts();
 
-  // t_ms,sdd,heater,flow_pulses,flow_hz,temp_c,btn1,btn2,btn3,steam
+  // t_ms,sdd,heater,pump_in,pump_out,flow_pulses,flow_hz,temp_c,btn1,btn2,btn3,steam
   Serial.print(now);
   Serial.print(',');
   Serial.print(lastSdd);
   Serial.print(',');
   Serial.print(lastHeater);
+  Serial.print(',');
+  Serial.print(lastPumpIn);
+  Serial.print(',');
+  Serial.print(lastPumpOut);
   Serial.print(',');
   Serial.print(pulses);
   Serial.print(',');
@@ -149,18 +247,26 @@ void updateOled(unsigned long now) {
   }
   lastOledMs = now;
 
+  const uint8_t btn1 = isActive(BTN_1CUP_PIN) ? 1 : 0;
+  const uint8_t btn2 = isActive(BTN_2CUP_PIN) ? 1 : 0;
+  const uint8_t btn3 = isActive(BTN_STEAM_PIN) ? 1 : 0;
+  const uint8_t steam = isActive(STEAM_HANDLE_PIN) ? 1 : 0;
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
+  // Рядок 1: passthrough ТЕН + помпа + flow
   display.setCursor(0, 0);
-  display.print(F("SDD:"));
-  display.print(lastSdd ? F("ON ") : F("off"));
-  display.print(F(" FL:"));
+  display.print(F("H:"));
+  display.print(lastHeater ? F("ON ") : F("off"));
+  display.print(F(" P:"));
+  display.print(lastPumpOut ? F("ON ") : F("off"));
+  display.print(F("FL:"));
   display.print(flowHz, 1);
-  display.print(F("Hz"));
 
-  display.setCursor(0, 12);
+  // Рядок 2: температура + імпульси
+  display.setCursor(0, 11);
   display.print(F("T:"));
   if (isnan(currentTemp)) {
     display.print(F("ERR"));
@@ -168,21 +274,19 @@ void updateOled(unsigned long now) {
     display.print(currentTemp, 1);
     display.print(F("C"));
   }
-
   noInterrupts();
   const unsigned long pulses = flowPulsesTotal;
   interrupts();
-  display.setCursor(64, 12);
+  display.setCursor(64, 11);
   display.print(F("N:"));
   display.print(pulses);
 
-  display.setCursor(0, 24);
-  display.print(F("B:"));
-  display.print(isActive(BTN_1CUP_PIN) ? '1' : '-');
-  display.print(isActive(BTN_2CUP_PIN) ? '2' : '-');
-  display.print(isActive(BTN_STEAM_PIN) ? 'S' : '-');
-  display.print(isActive(STEAM_HANDLE_PIN) ? 'H' : '-');
-  display.print(F(" LOG"));
+  // Рядок 3: кнопки / ручка пари — головне для live-діагностики
+  display.setCursor(0, 22);
+  display.print(btn1 ? F("[1]") : F(" 1 "));
+  display.print(btn2 ? F("[2]") : F(" 2 "));
+  display.print(btn3 ? F("[S]") : F(" S "));
+  display.print(steam ? F("[STEAM]") : F(" steam "));
 
   display.display();
 }
@@ -191,6 +295,7 @@ void setup() {
   Serial.begin(115200);
 
   pinMode(SDD_PIN, INPUT_PULLUP);
+  pinMode(PUMP_CTRL_PIN, INPUT_PULLUP);
   pinMode(BTN_1CUP_PIN, INPUT_PULLUP);
   pinMode(BTN_2CUP_PIN, INPUT_PULLUP);
   pinMode(BTN_STEAM_PIN, INPUT_PULLUP);
@@ -200,6 +305,12 @@ void setup() {
   digitalWrite(HEATER_PIN, LOW);
 
   setupFlowmeterInterrupt();
+
+  // Диммер: Zero-Cross = D2 (всередині бібліотеки), GATE = D3
+  Dimmer_init_begin();
+  Dimmer_pin_assign(PUMP_DIMMER, DIMMER_GATE_PIN);
+  Dimmer_init_end();
+  Dimm_value(PUMP_DIMMER, 0);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("# OLED init failed"));
@@ -214,9 +325,9 @@ void setup() {
 
   delay(500); // перша конверсія MAX6675
 
-  // Заголовок CSV (рядки з # ігноруються більшістю парсерів)
   Serial.println(F("# EC685 debug-repeater"));
-  Serial.println(F("# t_ms,sdd,heater,flow_pulses,flow_hz,temp_c,btn1,btn2,btn3,steam"));
+  Serial.println(F("# t_ms,sdd,heater,pump_in,pump_out,flow_pulses,flow_hz,temp_c,btn1,btn2,btn3,steam"));
+  Serial.println(F("# EVT lines: button / steam_handle edge events"));
 
   const unsigned long now = millis();
   lastLogMs = now;
@@ -228,24 +339,28 @@ void setup() {
 void loop() {
   const unsigned long now = millis();
 
-  // 1. Passthrough SDD → SSR (максимально часто)
+  // 1. Passthrough SDD → SSR і штатна помпа → диммер (максимально часто)
   passThroughHeater();
+  passThroughPump();
 
-  // 2. Частота імпульсів флоуметра
+  // 2. Події кнопок / ручки пари — одразу в Serial
+  logControlEvents(now);
+
+  // 3. Частота імпульсів флоуметра
   updateFlowRate(now);
 
-  // 3. Температура (рідко — обмеження MAX6675)
+  // 4. Температура (рідко — обмеження MAX6675)
   if (now - lastTempMs >= TEMP_INTERVAL_MS) {
     lastTempMs = now;
     currentTemp = thermocouple.readCelsius();
   }
 
-  // 4. CSV-лог у Serial
+  // 5. CSV-лог у Serial
   if (now - lastLogMs >= LOG_INTERVAL_MS) {
     lastLogMs = now;
     logCsvLine(now);
   }
 
-  // 5. Статус на OLED
+  // 6. Статус на OLED (кнопки виділені в нижньому рядку)
   updateOled(now);
 }

@@ -47,8 +47,8 @@
 
 | Пін | Роль |
 | --- | --- |
-| `D11` | CS термопари **Tt** (термоблок) |
-| `A2` | CS термопари **Tw** (бачок) |
+| `A2` | CS термопари **Tt** (термоблок) |
+| `D11` | CS термопари **Tw** (бачок) |
 | `D12` | SO / MISO (спільна шина) |
 | `D13` | SCK (спільна шина) |
 | `A4` / `A5` | OLED I2C (SDA / SCL) |
@@ -119,7 +119,8 @@ pip install pyserial matplotlib PyQt5
 ### Запуск
 
 ```bash
-# зі кореня репозиторію, з активованим venv
+cd /mnt/data/Programs/delonghi-ec685-mod/
+source plotter_venv/bin/activate
 python3 scripts/004_plot_temps.py --list-ports
 python3 scripts/004_plot_temps.py --port /dev/ttyUSB0
 python3 scripts/004_plot_temps.py --port /dev/ttyUSB0 --save
@@ -170,7 +171,7 @@ t_ms,Tt_C,Tw_C,wall_time
 | --- | --- | --- |
 | `max6675.h: No such file` | Немає бібліотеки | Library Manager → **MAX6675** (Adafruit) |
 | OLED `---` / Serial `nan` | Обрив / переплутані CS / немає живлення модуля | Перевірити `D11`/`A2`/`D12`/`D13`, VCC/GND, холодний спай |
-| Tw застряг, Tt ок | Лише CS Tw (`A2`) або модуль #2 | Поміняти місцями модулі для діагностики |
+| Tw застряг, Tt ок | Лише CS Tw (`D11`) або модуль #2 | Поміняти місцями модулі для діагностики |
 | Upload / open port failed | Порт зайнятий Plotter’ом або Python | Закрити вікно / Monitor |
 | `FigureCanvasAgg is non-interactive` | У venv немає Qt/Tk | `pip install PyQt5` у тому ж venv |
 | Порт не той | Nano на іншому `/dev/ttyUSBx` | `--list-ports` |

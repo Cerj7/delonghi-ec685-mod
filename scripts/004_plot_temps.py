@@ -73,12 +73,13 @@ _BACKEND = _configure_matplotlib_backend()
 try:
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
+    from matplotlib.ticker import MultipleLocator
 except ImportError:
     print("Потрібен matplotlib: pip install matplotlib", file=sys.stderr)
     sys.exit(1)
 
 
-WINDOW_S = 60.0
+WINDOW_S = 120.0
 BAUD = 115200
 
 
@@ -144,7 +145,12 @@ def main() -> int:
     ax.set_ylabel("Tt °C")
     ax.set_xlabel("час, с (вікно {:.0f} с)".format(args.window))
     ax.legend(loc="upper right")
-    ax.grid(True, alpha=0.3)
+    # Підписи кожні 5 °C (…75, 80, 85…); пунктирна сітка на кожен градус.
+    ax.yaxis.set_major_locator(MultipleLocator(5))
+    ax.yaxis.set_minor_locator(MultipleLocator(1))
+    ax.grid(True, which="major", axis="y", alpha=0.45)
+    ax.grid(True, which="minor", axis="y", linestyle="--", alpha=0.35)
+    ax.grid(True, which="major", axis="x", alpha=0.3)
     tw_text = ax.text(
         0.01,
         0.97,
@@ -224,7 +230,12 @@ def main() -> int:
         vals = [v for v in y_tt if v == v]
         if vals:
             pad = max(1.0, (max(vals) - min(vals)) * 0.1)
-            ax.set_ylim(min(vals) - pad, max(vals) + pad)
+            # Цілі межі, щоб горизонтальні лінії сітки збігалися з цілими °C.
+            y_lo = math.floor(min(vals) - pad)
+            y_hi = math.ceil(max(vals) + pad)
+            if y_hi <= y_lo:
+                y_hi = y_lo + 1
+            ax.set_ylim(y_lo, y_hi)
 
         return (line_tt,)
 
