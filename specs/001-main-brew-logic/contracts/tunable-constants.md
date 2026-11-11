@@ -11,8 +11,8 @@
 | `TARGET_MIN_C` | 20.0 | Низький край потенціометра еспресо |
 | `TARGET_MAX_C` | 100.0 | Верхній край потенціометра еспресо |
 | `TARGET_OFF_BAND_C` | 1.0 | Біля мінімуму = нагрів OFF |
-| `STEAM_TARGET_C` | 120.0 | Цііль пару |
-| `STEAM_READY_BAND_C` | 2.0 | ± смуга для миттєвого `HS0` (без `READY_HOLD_MS`; SC-005) |
+| `STEAM_TARGET_C` | 120.0 | Цііль пару; готовність `HS0` = `Tt ≥ STEAM_TARGET_C` (без верхньої межі) |
+| `STEAM_READY_BAND_C` | 0.0 | **Не використовується** для `HS0` (залишено для сумісності/майбутнього гістерезису; критерій односторонній ≥ target) |
 | `READY_BAND_C` | 1.0 | ± допуск готовності еспресо / після `LT1` (з hold) |
 | `HEATER_DEADBAND_C` | 0.5 | Мертва зона ПІ |
 | `SAFETY_CUTOFF_C` | 130.0 | Аварійне вимкнення ТЕНу (≥ пару) |
@@ -28,7 +28,7 @@
 | `PREINFUSION_PAUSE_MS` | 2000 | Пауза після преінфузії |
 | `STEAM_PULSE_ON_MS` | 500 | Імпульс помпи пару ON |
 | `STEAM_PULSE_OFF_MS` | 1000 | Імпульс помпи пару OFF |
-| `STEAM_IDLE_EXIT_MS` | 0 | Idle у `HS0` → `LT1`; **0 = вимкнено** (лише ручка / `B3`). Ненульове — опційний авто-вихід |
+| `STEAM_IDLE_EXIT_MS` | 3000 | Idle у `HS0` (ручка закрита, без кнопок) → `LT1` і зняття цілі пару. **0 = вимкнено**. Дефолт 3000 (FR-014 / SC-007) |
 | `HEATER_WINDOW_MS` | 1000 | Вікно часового ШІМ ТЕНу |
 | `CONTROL_INTERVAL_MS` | 100 | Період перерахунку ПІ |
 | `BLOCK_TEMP_INTERVAL_MS` | 250 | Опитування MAX6675 |
@@ -50,10 +50,18 @@
 
 ## PI / pots / dimmer
 
+Три профілі (FR-027 / SC-010): base · brew-flow (**4×**) · steam-flow (**2.5×**) + адитивний feed-forward % під час flow. Без target-offset. Brew-flow активний **лише** у фазі `FLOW`; steam-flow — увесь `STEAM_FLOW`; інакше base (FF=0). Стенд: 3×/2× без FF було мало → option C.
+
 | Constant | Default | Used for |
 | --- | --- | --- |
-| `HEATER_KP` | 5.0 | ПІ Kp |
-| `HEATER_KI` | 0.05 | ПІ Ki |
+| `HEATER_KP` | 5.0 | Базовий ПІ Kp (idle / heat / ready / cool / preinfuse / pause) |
+| `HEATER_KI` | 0.05 | Базовий ПІ Ki |
+| `HEATER_KP_BREW` | 20.0 | Brew-flow Kp (4× base) — лише `BrewPhase==FLOW` |
+| `HEATER_KI_BREW` | 0.20 | Brew-flow Ki (4× base) |
+| `HEATER_FF_BREW_PCT` | 20 | Адитивний FF % під час brew `FLOW` (до виходу ПІ, clamp 0…100) |
+| `HEATER_KP_STEAM` | 12.5 | Steam-flow Kp (2.5× base) — увесь `STEAM_FLOW` |
+| `HEATER_KI_STEAM` | 0.125 | Steam-flow Ki (2.5× base) |
+| `HEATER_FF_STEAM_PCT` | 12 | Адитивний FF % під час `STEAM_FLOW` (clamp 0…100) |
 | `POT_SAMPLES` | 8 | Усереднення АЦП |
 | `POT_SMOOTHING` | 0.3 | EMA потенціометрів |
 | `DIMMER_HYSTERESIS` | 2 | Гістерезис рівня диммера |
@@ -88,6 +96,6 @@
 
 Перед merge прошивки:
 
-1. `rg` по скетчу: немає літералів на кшталт `120`, `2000`, `40`, `500`, `1000`, `3000`, `28` у логіці поза секцією констант / таблиці диммера.
+1. `rg` по скетчу: немає літералів на кшталт `120`, `2000`, `40`, `500`, `1000`, `3000`, `28`, `20.0`, `12.5`, `0.20`, `0.125` у логіці поза секцією констант / таблиці диммера.
 2. Таблиця `DIMMER_CURVE` лишається даними калібрування (допустимі літерали всередині масиву), але сама крива — іменована.
 3. Зміна тюнінгу = правка лише секції Tunables (+ за потреби цей контракт).

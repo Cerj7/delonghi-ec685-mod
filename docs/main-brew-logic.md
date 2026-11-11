@@ -42,17 +42,19 @@ POWER_ON → HE1 → ESPRESSO_HEAT
                  ▼
             ESPRESSO_READY (HE0)
                  ├─ B1 → BREW_1 (P11): PREINFUSE → PAUSE → FLOW; stop B1 → P10
+                 │     PI: PREINFUSE/PAUSE = base; FLOW = brew-flow (4× + FF)
                  ├─ B2 → BREW_2 (P21): те саме; stop B2 → P20
-                 └─ B3 → STEAM_HEAT (HS1, target STEAM_TARGET_C)
-                            ├─ |Tt−steam|≤STEAM_READY_BAND_C → STEAM_READY (HS0, без hold)
-                            ├─ B3 → coolOrReady()
-                            │         STEAM_READY:
-                            │           handle open → STEAM_FLOW (SS1, імпульси; OLED OPEN)
-                            │           idle STEAM_IDLE_EXIT_MS (>0) → STEAM_COOL (LT1)
-                            │             // дефолт 0 = без авто-LT1
-                            │           B3 → coolOrReady()  // НЕ SS1
-                            │         STEAM_FLOW: handle close → SS0 → coolOrReady()
-                            └─ STEAM_COOL: ready → LT0 → ESPRESSO_READY
+                 └─ B3 → enterSteam()  // Tt ≥ STEAM_TARGET_C → HS0, інакше HS1
+                            ├─ STEAM_HEAT: Tt ≥ STEAM_TARGET_C → HS0 (без hold / без ± band)
+                            │     if handle open → SS1; B3 → coolOrReady()
+                            ├─ STEAM_READY (HS0): ціль STEAM_TARGET_C; PI = base
+                            │     Tt < target (ручка closed) → HS1 (авто); handle open → SS1
+                            │     idle STEAM_IDLE_EXIT_MS (дефолт 3000) → LT1
+                            │     B3 → coolOrReady()  // НЕ SS1
+                            ├─ STEAM_FLOW: close → SS0 → HS0 (не coolOrReady)
+                            │     Tt < target → лишатись у flow (без HS1 / без паузи помпи)
+                            │     PI = steam-flow (2.5× + FF)
+                            └─ STEAM_COOL: B3 → enterSteam(); ready → LT0 → ESPRESSO_READY
 
 FAULT ← невалідна Tt / SAFETY_CUTOFF_C  (лише power cycle)
 ```
@@ -60,9 +62,14 @@ FAULT ← невалідна Tt / SAFETY_CUTOFF_C  (лише power cycle)
 Ключові правила:
 
 - Під час `BREW_1` чужі кнопки (`B2`/`B3`) ігнор; під час `BREW_2` — `B1`/`B3`.
-- У всіх парових/охолоджувальних станах `B1`/`B2` ігнор; `B3` ігнор у `STEAM_FLOW` / `STEAM_COOL`.
-- Помпа: преінфузія `PREINFUSION_PCT`; FLOW — живий потенціометр `A0`; пар — імпульси `STEAM_PULSE_*`; інакше `PUMP_OFF_PCT`.
-- `coolOrReady()`: ціль → уставка еспресо; якщо Tt вища — `LT1`/`STEAM_COOL`; інакше `LT0` і `HE1`/`ESPRESSO_HEAT` або `ESPRESSO_READY`.
+- У парових/охолоджувальних станах `B1`/`B2` ігнор; `B3` ігнор у `STEAM_FLOW`; у `STEAM_COOL` `B3` = `enterSteam()`.
+- Помпа: преінфузія `PREINFUSION_PCT`; FLOW — живий потенціометр `A0`; пар — імпульси `STEAM_PULSE_*` (навіть якщо Tt < target); інакше `PUMP_OFF_PCT`.
+- ПІ-профілі (FR-027 / SC-010, stand → option C) — три tunable набори Kp/Ki + FF під час flow, без target-offset:
+  - **base** (`HEATER_KP`/`HEATER_KI` = 5.0/0.05, FF=0) — idle, heat, ready, cool, brew `PREINFUSE`/`PAUSE`, `STEAM_HEAT`/`STEAM_READY`;
+  - **brew-flow** (`HEATER_KP_BREW`/`HEATER_KI_BREW` = 20.0/0.20, **4×** + `HEATER_FF_BREW_PCT=20`) — лише brew phase `FLOW`;
+  - **steam-flow** (`HEATER_KP_STEAM`/`HEATER_KI_STEAM` = 12.5/0.125, **2.5×** + `HEATER_FF_STEAM_PCT=12`) — увесь `STEAM_FLOW`.
+- `coolOrReady()`: лише cancel/`idle` → ціль еспресо; якщо Tt вища — `LT1`/`STEAM_COOL`; інакше `LT0` і heat/ready. **Не** з `SS0` і **не** з падіння Tt у `STEAM_FLOW`.
+- Готовність пару: `Tt ≥ STEAM_TARGET_C` (overshoot OK; без `READY_HOLD_MS`, без ±`STEAM_READY_BAND_C`). У `STEAM_FLOW` падіння Tt **не** дає `HS1`/`SS0` і **не** паузить помпу (FR-026); авто-`HS1` лише з `STEAM_READY` при закритій ручці.
 
 ---
 
@@ -125,7 +132,7 @@ USB Serial основної: **115200**, кадр = код ≤3 символи +
 | Джерело | `B3` у `HS0` (ручка закрита) | Старт `SS1` |
 | --- | --- | --- |
 | Приклад у protocol | → `SS1` | від кнопки «Пар» |
-| `013` (FR-021) | → `coolOrReady()` одразу (без idle 3 с); **не** `SS1` | лише відкриття **ручки пари** |
+| `013` (FR-021) | → `coolOrReady()` одразу (без idle 3 с); **не** `SS1` | відкриття **ручки пари** (або одразу після `HS0`, якщо ручка вже відкрита) |
 
 Тобто коди кадрів ті самі (`B3`, `HS*`, `SS*`, `LT*`), але семантика основної плати для `B3`@`HS0` — скасування пару, не подача. Фіксація override: [`contracts/panel-uart.md`](../specs/001-main-brew-logic/contracts/panel-uart.md) § Feature-specific override.
 

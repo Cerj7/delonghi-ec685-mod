@@ -6,7 +6,9 @@
 
 **Tests**: Manual stand validation only (per research.md / quickstart.md). No automated unit/contract test tasks.
 
-**Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
+**Organization**: Tasks are grouped by user story. **Phase 11 = CURRENT delta** (stand retune option C: 4×/2.5× + FF); Phase 10 = session 3 desk-check done; Phases 1–9 = baseline.
+
+**Delta scope**: Raise brew/steam PI gains + add feed-forward % during flow in `scripts/013_main_brew_logic.cpp` + docs sync.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -73,7 +75,7 @@
 
 **Goal**: From ready, `B1` runs preinfusion/pause/flow with OLED brew metrics; same button stops
 
-**Independent Test**: After `HE0`, press 1 espresso; verify 2 s @ 40 % → 2 s pause → pot power; OLED ≥2 Hz; second `B1` stops ≤300 ms with `P10`; `B2`/`B3` ignored (quickstart S2)
+**Independent Test**: After `HE0`, press 1 espresso; verify 2 s @ 40 % → 2 s pause → pot power; OLED ≥2 Hz; second `B1` stops ≤300 ms with `P10`; `B2`/`B3` ignored (quickstart S2). **PI**: base during preinfuse/pause; brew-flow during `FLOW` (Phase 10 / SC-010).
 
 ### Implementation for User Story 2
 
@@ -82,9 +84,9 @@
 - [X] T019 [US2] On repeat `B1` in `BREW_1` in `scripts/013_main_brew_logic.cpp`: pump `PUMP_OFF_PCT`, send `P10`, return `ESPRESSO_READY` within `BUTTON_REACT_MAX_MS` budget (FR-005, SC-003)
 - [X] T020 [US2] Ignore `B2`/`B3` during `BREW_1` in `scripts/013_main_brew_logic.cpp` (FR-005)
 - [X] T021 [US2] During `BREW_1` OLED path in `scripts/013_main_brew_logic.cpp`: every `BREW_DISPLAY_INTERVAL_MS` show water counter (pulses or ml via `FLOW_PULSES_PER_ML`), block temp, pump % (FR-008, SC-004)
-- [X] T022 [US2] Keep espresso PI target from temp pot during brew in `scripts/013_main_brew_logic.cpp`; on fault abort brew (pump 0, no dangling `P11`)
+- [X] T022 [US2] Keep espresso PI target from temp pot during brew in `scripts/013_main_brew_logic.cpp`; on fault abort brew (pump 0, no dangling `P11`) — *delta PI gains: Phase 10 T054/T055*
 
-**Checkpoint**: US1+US2 — single-shot brew works end-to-end from ready
+**Checkpoint**: US1+US2 — single-shot brew works end-to-end from ready; brew-flow PI gains → Phase 10
 
 ---
 
@@ -92,7 +94,7 @@
 
 **Goal**: Same brew profile as US2 with `B2` / `P21` / `P20`
 
-**Independent Test**: From ready, `B2` → same timing/power sequence → stop with `B2`/`P20`; `B1`/`B3` ignored (quickstart S3)
+**Independent Test**: From ready, `B2` → same timing/power sequence → stop with `B2`/`P20`; `B1`/`B3` ignored (quickstart S3); same brew-flow PI as US2 in `FLOW`
 
 ### Implementation for User Story 3
 
@@ -108,19 +110,21 @@
 
 **Goal**: Steam heat to 120 °C, handle-driven pulses, idle/`B3` cancel via cool path; ignore espresso buttons in steam/cool
 
-**Independent Test**: From ready run quickstart S4 (`HS1`→`HS0`, cancel, handle `SS1`/`SS0`, idle 3 s → `LT*`, `B3`@`HS0` cancel, ignore `B1`/`B2`)
+**Independent Test**: From ready run quickstart S4 (оновлений — Phase 9 + **Phase 10**)
 
 ### Implementation for User Story 4
 
-- [X] T026 [US4] On `B3` from `ESPRESSO_READY` in `scripts/013_main_brew_logic.cpp`: send `HS1`, enter `STEAM_HEAT`, `activeTargetC=STEAM_TARGET_C` (FR-009, FR-013)
-- [X] T027 [US4] In `STEAM_HEAT` of `scripts/013_main_brew_logic.cpp`: heat to steam target; on `|Tt−STEAM_TARGET_C|≤STEAM_READY_BAND_C` send `HS0` immediately (**no** `READY_HOLD_MS`) and enter `STEAM_READY` (FR-011, SC-005)
-- [X] T028 [US4] On `B3` during `STEAM_HEAT` in `scripts/013_main_brew_logic.cpp`: cancel via `coolOrReady()` (FR-010)
-- [X] T029 [US4] In `STEAM_READY` of `scripts/013_main_brew_logic.cpp`: open handle → `SS1`/`STEAM_FLOW`; closed idle `STEAM_IDLE_EXIT_MS` → `LT1`/`STEAM_COOL`; `B3` → `coolOrReady()` without `SS1` (FR-012, FR-014, FR-021, SC-006/007)
-- [X] T030 [US4] Implement steam pulse pump in `STEAM_FLOW` of `scripts/013_main_brew_logic.cpp`: `STEAM_PULSE_ON_MS`/`STEAM_PULSE_OFF_MS` @ `STEAM_PULSE_PCT`; handle close → `SS0`, pump 0, then `coolOrReady()` (not idle `HS0` / 3 s) (FR-012, FR-015, SC-006)
-- [X] T031 [US4] Complete `STEAM_COOL` in `scripts/013_main_brew_logic.cpp`: target espresso pot; ready criterion → `LT0` → `ESPRESSO_READY`; ignore `B1`/`B2` in all steam/cool states; ignore `B3` in `STEAM_FLOW`/`STEAM_COOL` (FR-014, FR-022)
-- [X] T032 [US4] Hold steam PI near `STEAM_TARGET_C` until exit and keep `SAFETY_CUTOFF_C` protective in `scripts/013_main_brew_logic.cpp` (FR-013, FR-018)
+> **Superseded by Phase 9 + Phase 10**. T026–T032 = baseline; T042–T051 = session 2; T048 behavior superseded by Phase 10 T056 (no flow pause).
 
-**Checkpoint**: Full steam lifecycle + return to espresso ready
+- [X] T026 [US4] On `B3` from `ESPRESSO_READY` in `scripts/013_main_brew_logic.cpp`: send `HS1`, enter `STEAM_HEAT`, `activeTargetC=STEAM_TARGET_C` (FR-009, FR-013) — *delta: T044 `enterSteam()`*
+- [X] T027 [US4] In `STEAM_HEAT` of `scripts/013_main_brew_logic.cpp`: heat to steam target; on `|Tt−STEAM_TARGET_C|≤STEAM_READY_BAND_C` send `HS0` immediately (**no** `READY_HOLD_MS`) and enter `STEAM_READY` (FR-011, SC-005) — *delta: T043/T045 `Tt ≥ STEAM_TARGET_C`*
+- [X] T028 [US4] On `B3` during `STEAM_HEAT` in `scripts/013_main_brew_logic.cpp`: cancel via `coolOrReady()` (FR-010)
+- [X] T029 [US4] In `STEAM_READY` of `scripts/013_main_brew_logic.cpp`: open handle → `SS1`/`STEAM_FLOW`; closed idle `STEAM_IDLE_EXIT_MS` → `LT1`/`STEAM_COOL`; `B3` → `coolOrReady()` without `SS1` (FR-012, FR-014, FR-021, SC-006/007) — *delta: T042 idle=3000, T046 auto-reheat*
+- [X] T030 [US4] Implement steam pulse pump in `STEAM_FLOW` of `scripts/013_main_brew_logic.cpp`: `STEAM_PULSE_ON_MS`/`STEAM_PULSE_OFF_MS` @ `STEAM_PULSE_PCT`; handle close → `SS0`, pump 0, then `coolOrReady()` (not idle `HS0` / 3 s) (FR-012, FR-015, SC-006) — *delta: T047 close→HS0*
+- [X] T031 [US4] Complete `STEAM_COOL` in `scripts/013_main_brew_logic.cpp`: target espresso pot; ready criterion → `LT0` → `ESPRESSO_READY`; ignore `B1`/`B2` in all steam/cool states; ignore `B3` in `STEAM_FLOW`/`STEAM_COOL` (FR-014, FR-022) — *delta: T050 `B3`→enterSteam*
+- [X] T032 [US4] Hold steam PI near `STEAM_TARGET_C` until exit and keep `SAFETY_CUTOFF_C` protective in `scripts/013_main_brew_logic.cpp` (FR-013, FR-018) — *delta: T046/T049 maintain target; Phase 10 steam-flow gains*
+
+**Checkpoint**: Baseline steam landed; complete **Phase 10** before stand S4 pass against current spec
 
 ---
 
@@ -147,9 +151,86 @@
 
 - [X] T037 [P] Complete `docs/main-brew-logic.md` (FSM summary, Tunables table pointer, Serial service commands, stand wiring, differences vs protocol example for `B3`@`HS0`)
 - [X] T038 [P] Update `readme.md` to list `013_main_brew_logic.cpp` and link `docs/main-brew-logic.md` / feature specs
-- [ ] T039 Run magic-literal compliance check (`rg` for business literals like 120/2000/40/500/1000/3000/28 outside Tunables) on `scripts/013_main_brew_logic.cpp` per `contracts/tunable-constants.md`
-- [ ] T040 Execute quickstart scenarios S1–S6 on dual-Nano stand; fix timing/SLA gaps against SC-001…SC-008
-- [ ] T041 [P] Sync any Tunables default drift back into `specs/001-main-brew-logic/contracts/tunable-constants.md` if defaults changed during stand tuning
+- [ ] T039 Run magic-literal compliance check (`rg` for business literals like 120/2000/40/500/1000/3000/28/20.0/12.5/0.20/0.125 outside Tunables) on `scripts/013_main_brew_logic.cpp` per `contracts/tunable-constants.md` — після Phase 11 T063
+- [ ] T040 Execute quickstart scenarios S1–S6 on dual-Nano stand; fix timing/SLA gaps against SC-001…SC-010 — **UNBLOCKED**; physical dual-Nano stand still required (T059 = desk-check only)
+- [ ] T041 [P] Sync any Tunables default drift back into `specs/001-main-brew-logic/contracts/tunable-constants.md` if defaults changed during stand tuning — **UNBLOCKED**; desk-check T059 found `STEAM_PULSE_ON_MS=300` (contract/SC-006: 500) and `STEAM_IDLE_EXIT_MS=5000` (contract/T042: 3000) in `013` Tunables
+
+---
+
+## Phase 9: Delta — Steam clarify session 2 (US4) ✅ DONE
+
+**Purpose**: Підтягнути `scripts/013_main_brew_logic.cpp` до clarify session 2. Не переписувати brew/decalc.
+
+**Goal**: Пар: `Tt ≥ STEAM_TARGET_C` → `HS0`; idle 3 с → `LT1`; `SS0` → `HS0`; авто-догрів у `STEAM_READY`; `B3`@`STEAM_COOL` → `enterSteam()`
+
+**Independent Test**: quickstart S4 session-2 subset (overshoot, close→HS0, idle→LT1, B3@cool). **Note**: flow Tt-drop behavior replaced by Phase 10.
+
+**Depends on**: Phase 6 baseline; contracts session 2
+
+### Implementation delta
+
+- [X] T042 [US4] In Tunables of `scripts/013_main_brew_logic.cpp`: set `STEAM_IDLE_EXIT_MS=3000`, set `STEAM_READY_BAND_C=0.0f` (unused for HS0) with comments pointing to FR-011/FR-014 and `contracts/tunable-constants.md`
+- [X] T043 [US4] Change steam-ready helper in `scripts/013_main_brew_logic.cpp` from `|Tt−STEAM_TARGET_C|≤STEAM_READY_BAND_C` to **`Tt ≥ STEAM_TARGET_C`** (no hold, no upper band; FR-011, SC-005)
+- [X] T044 [US4] Add `enterSteam()` in `scripts/013_main_brew_logic.cpp` per `contracts/main-fsm.md`: `activeTargetC=STEAM_TARGET_C`; if `Tt ≥ STEAM_TARGET_C` → send `HS0`/`STEAM_READY` (+ reset idle clock); else `HS1`/`STEAM_HEAT`. Wire `B3` from `ESPRESSO_READY` through `enterSteam()` (FR-009)
+- [X] T045 [US4] In `STEAM_HEAT` path of `scripts/013_main_brew_logic.cpp`: on steam-ready → `HS0`/`STEAM_READY`; if steam handle already open → immediately `SS1`/`STEAM_FLOW` (FR-026 resume from heat)
+- [X] T046 [US4] In `STEAM_READY` of `scripts/013_main_brew_logic.cpp`: if `Tt < STEAM_TARGET_C` → send `HS1`, enter `STEAM_HEAT` (**not** `coolOrReady`); keep PI on `STEAM_TARGET_C` while handle open or closed until idle/cancel (FR-026, FR-013)
+- [X] T047 [US4] In `STEAM_FLOW` of `scripts/013_main_brew_logic.cpp`: handle close → `SS0`, pump `PUMP_OFF_PCT`, return **`STEAM_READY`** and start/continue idle timer — **MUST NOT** call `coolOrReady()` (FR-015, SC-006)
+- [X] T048 [US4] ~~In `STEAM_FLOW`: if `Tt < STEAM_TARGET_C` → `SS0`, pump 0, enter `STEAM_HEAT`~~ — **SUPERSEDED by Phase 10 T056** (session 3: stay in flow, no HS1/pause)
+- [X] T049 [US4] In `STEAM_READY` idle of `scripts/013_main_brew_logic.cpp`: count `STEAM_IDLE_EXIT_MS` only with handle closed and no button events; open handle / `STEAM_FLOW` resets or pauses timer; on expiry → `LT1`/`STEAM_COOL` + drop steam target via same cool path as cancel (FR-014, SC-007)
+- [X] T050 [US4] In `onPanelButton` for `STEAM_COOL` in `scripts/013_main_brew_logic.cpp`: `B3` → `enterSteam()` (FR-025, SC-009); keep `B1`/`B2` ignored; keep `B3` ignored only in `STEAM_FLOW` (FR-022)
+- [X] T051 [P] [US4] Verify `docs/main-brew-logic.md` FSM/rules match Phase 9 behavior; fix any leftover «close→coolOrReady» / «idle=0» / «± band» wording
+- [X] T052 [US4] Stand-validate quickstart S4 against SC-005…SC-010 (**після Phase 10**; includes continuous pulse + PI profiles) — **closed via T059 desk-check** (S4 continuous pulse + steam-flow PI / SC-006·SC-010 code paths); full physical S4 + SC-005…SC-009 timings remain under T040
+
+**Checkpoint**: Session 2 steam landed; **Phase 10 required** before claiming S4 pass on current spec
+
+---
+
+## Phase 10: Delta — Clarify session 3 (US2 + US4) ✅ DONE (desk-check)
+
+**Purpose**: Continuous steam pulse below 120 °C + three PI profiles (base / brew-flow 3× / steam-flow 2×) per clarify 2026-11-11 session 3, `plan.md`, `contracts/main-fsm.md`, `tunable-constants.md`.
+
+**Goal**:
+1. `STEAM_FLOW` + `Tt < STEAM_TARGET_C` → stay in flow, keep pulses, **no** `HS1`/`SS0` (FR-026).
+2. Auto-`HS1` **only** from `STEAM_READY` with handle closed.
+3. PI: base idle; brew-flow only in brew `FLOW`; steam-flow entire `STEAM_FLOW` (FR-027 / SC-010).
+
+**Independent Test**: quickstart S2 (PI switches at `FLOW`) + S4 steps 8–9 (closed-handle auto-HS1; open-handle continuous pulse below target) + SC-010
+
+**Depends on**: Phase 9 code; contracts/plan already refreshed by `/speckit-plan`
+
+### Implementation delta
+
+- [X] T053 [P] Add Tunables `HEATER_KP_BREW=15.0`, `HEATER_KI_BREW=0.15`, `HEATER_KP_STEAM=10.0`, `HEATER_KI_STEAM=0.10` (comments FR-027 / 3× & 2× of base) in `scripts/013_main_brew_logic.cpp` matching `specs/001-main-brew-logic/contracts/tunable-constants.md`
+- [X] T054 In heater PI step of `scripts/013_main_brew_logic.cpp`: select active Kp/Ki — brew-flow iff `(BREW_1|BREW_2) && BrewPhase==FLOW`; steam-flow iff `STEAM_FLOW`; else base (`HEATER_KP`/`HEATER_KI`); switch within ≤ one `CONTROL_INTERVAL_MS`; keep `SAFETY_CUTOFF_C` common; no target-offset / no feed-forward (FR-027, SC-010)
+- [X] T055 [US2] Confirm brew path in `scripts/013_main_brew_logic.cpp`: PREINFUSE/PAUSE use base PI; entering `FLOW` uses brew-flow gains; leaving brew (`P10`/`P20` / fault) returns to base (FR-027, SC-010; quickstart S2)
+- [X] T056 [US4] In `STEAM_FLOW` of `scripts/013_main_brew_logic.cpp`: **remove** T048 branch (`Tt < STEAM_TARGET_C` → `SS0`/pump 0/`STEAM_HEAT`); keep pulse pump running while handle open; continue heating with steam-flow PI; **MUST NOT** send `HS1`/`SS0` solely due to temp drop (FR-026, SC-006)
+- [X] T057 [US4] In `STEAM_READY` of `scripts/013_main_brew_logic.cpp`: keep auto-`HS1` only when handle is **closed** and `Tt < STEAM_TARGET_C`; do not apply that transition while already in `STEAM_FLOW` (FR-026)
+- [X] T058 [P] [US4] Update `docs/main-brew-logic.md` if any leftover «flow Tt drop → HS1 / pause pump» wording remains; confirm three PI profiles documented
+- [X] T059 [US4] Stand-validate quickstart S2 (brew-flow) + S4 (continuous pulse below 120 + steam-flow PI) against SC-006/SC-010; then resume Phase 8 T039–T041 / close T052 — **desk-check; hardware stand pending** (see Notes). Phase 8 T039–T041 unblocked; T052 closed.
+
+**Checkpoint**: Phase 10 code + desk-check done; **Phase 11** raises gains + FF after stand showed B too weak
+
+---
+
+## Phase 11: Delta — Stand retune option C (US2 + US4) 🔧 CURRENT
+
+**Purpose**: Після стенду 3×/2× без FF виявилось мало → option **C**: brew **4×** + FF, steam **2.5×** + FF (FR-027 / SC-010).
+
+**Goal**:
+1. Tunables: `HEATER_KP/KI_BREW=20/0.20`, `HEATER_FF_BREW_PCT=20`; `HEATER_KP/KI_STEAM=12.5/0.125`, `HEATER_FF_STEAM_PCT=12`.
+2. `updateHeaterPi`: додавати FF лише в brew-`FLOW` / `STEAM_FLOW`, clamp 0…100 з anti-windup.
+3. Docs/contracts already refreshed; verify `013` + `docs/main-brew-logic.md`.
+
+**Independent Test**: quickstart S2/S4 — менше просідання Tt під час flow vs попередні 3×/2×; SC-010
+
+### Implementation delta
+
+- [X] T060 [P] Update Tunables in `scripts/013_main_brew_logic.cpp` to option C gains + `HEATER_FF_BREW_PCT` / `HEATER_FF_STEAM_PCT` per `contracts/tunable-constants.md`
+- [X] T061 In `updateHeaterPi` of `scripts/013_main_brew_logic.cpp`: apply selected FF % additively during brew-`FLOW` / `STEAM_FLOW` only; include FF in anti-windup raw; clamp output 0…100 (FR-027)
+- [X] T062 [P] Sync `docs/main-brew-logic.md` PI section to 4×/2.5× + FF (if not already)
+- [ ] T063 Stand-validate S2/S4 temperature hold with option C; then T039–T041 / T040
+
+**Checkpoint**: Option C in firmware; physical stand confirms less droop → polish
 
 ---
 
@@ -157,87 +238,69 @@
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies — start immediately
-- **Foundational (Phase 2)**: Depends on Setup — BLOCKS all user stories
-- **User Stories (Phase 3–7)**: All depend on Foundational completion
-  - Prefer sequential P1 → P1 → P1 → P2 → P3 on one developer (shared single file)
-  - Logical independence still holds for stand validation per story
-- **Polish (Phase 8)**: Depends on desired stories being complete (MVP can polish after US1 only)
+- **Setup (Phase 1)**: Done
+- **Foundational (Phase 2)**: Done
+- **User Stories (Phase 3–7)**: Done (baseline)
+- **Phase 9 Delta (US4 session 2)**: Code done; T052 closed via T059 desk-check
+- **Phase 10 Delta (US2+US4 session 3)**: **DONE** (T053–T059); superseded gains by Phase 11
+- **Phase 11 Delta (option C)**: **CURRENT** — T060–T062 code/docs done; T063 stand
+- **Polish (Phase 8)**: T037/T038 done; **T039–T041 after T063**
 
 ### User Story Dependencies
 
-- **User Story 1 (P1)**: After Foundational — no dependency on other stories — **MVP**
-- **User Story 2 (P1)**: After Foundational; needs US1 ready state in practice (same sketch)
-- **User Story 3 (P1)**: After Foundational; reuses US2 brew phase machine (T023 depends on T018 conceptually)
-- **User Story 4 (P2)**: After Foundational; uses `coolOrReady()` (T011) and ready criterion from foundation/US1
-- **User Story 5 (P3)**: After Foundational; orthogonal to brew/steam (can follow US1 for early stand check with shortened interval)
+- **User Story 1, 3, 5**: Complete (no open delta)
+- **User Story 2 (P1)**: Baseline + Phase 10 + **Phase 11 brew 4×+FF**
+- **User Story 4 (P2)**: Baseline + Phase 9/10 + **Phase 11 steam 2.5×+FF**
 
-### Within Each User Story
+### Within Phase 11
 
-- Models/helpers before state handlers
-- Egress panel codes before relying on panel LEDs in stand tests
-- Core happy path before edge cancels
-- Story checkpoint before next priority when possible
+1. T060 Tunables ✅ → T061 FF in PI ✅ → T062 docs ✅ → T063 stand
 
-### Parallel Opportunities
+### Parallel Opportunities (delta)
 
-- T004 // T001–T003 (docs stub vs sketch create — limited, same author usually sequential)
-- T007 // T006 after UART basics started; T010 // T009 within Foundational
-- T023 can start once shared brew machine (T018) exists
-- T037 / T038 / T041 docs in parallel with stand fixes after code stable
-- **Note**: Primary code is one file (`013`) — true multi-dev parallel on implementation is limited; parallelize docs/compliance vs firmware owner
+- T062 docs // T060–T061 code (already synced)
+- T039 after T060/T061 constants settled
 
 ---
 
-## Parallel Example: User Story 2
+## Parallel Example: Phase 11
 
 ```bash
-# After US1 checkpoint, sequential in 013 (same file) — conceptual split:
-Task: "BREW_1 start P11 + counter reset"
-Task: "phase machine PREINFUSE→PAUSE→FLOW"
-Task: "stop B1→P10 + ignore B2/B3"
-Task: "brew OLED metrics @ BREW_DISPLAY_INTERVAL_MS"
+Task: "T060–T061 option C gains + FF in 013"
+Task: "T062 docs PI section"
+# Then stand:
+Task: "T063 S2/S4 temp hold"
 ```
 
-## Parallel Example: Polish
+## Parallel Example: Polish (after Phase 11)
 
 ```bash
-Task: "Complete docs/main-brew-logic.md"
-Task: "Update readme.md for 013"
-Task: "Sync tunable-constants.md defaults"
+Task: "T039 magic-literal rg on 013"
+Task: "T040/T063 quickstart S1–S6 incl. SC-010"
+Task: "T041 sync tunable-constants.md if tuned"
 ```
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (User Story 1 Only)
+### Current focus
 
-1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational (CRITICAL)
-3. Complete Phase 3: User Story 1
-4. **STOP and VALIDATE**: quickstart S1 (+ fault smoke)
-5. Demo heat/ready panel indication
+1. ~~**Phase 10** T053→T059~~ ✅
+2. **Phase 11** T060–T062 ✅ code; **T063** stand retune
+3. **Finish Phase 8**: T039 → T041; T040 physical dual-Nano stand (S1–S6)
 
-### Incremental Delivery
+### MVP / prior delivery (historical)
 
-1. Setup + Foundational → foundation ready
-2. US1 → S1 → MVP demo
-3. US2 → S2 → daily single shot
-4. US3 → S3 → double shot
-5. US4 → S4 → steam
-6. US5 → S5 → decalc reminder
-7. Polish → S6 + docs + literal compliance
+1. Setup + Foundational → US1…US5 baseline already landed
+2. Phase 9 = session 2 steam patch
+3. Phase 10 = session 3 behavior patch (US2 PI + US4 flow)
 
-### Parallel Team Strategy
+### Parallel Team Strategy (delta)
 
-With multiple developers (constrained by single sketch):
-
-1. Team completes Setup + Foundational together
-2. Dev A: US1→US2→US3 brew path
-3. Dev B: docs (`docs/main-brew-logic.md`, readme) + stand checklist from quickstart
-4. After brew MVP: Dev A US4, then US5
-5. Integrate only via careful section ownership comments in `013` if splitting
+1. ~~Dev A: T053–T057 in `013`~~ ✅
+2. ~~Dev B: T058 docs wording check~~ ✅
+3. ~~Together: T059 desk-check~~ ✅ → Phase 11 option C → **T063 stand**, then T039–T041
 
 ---
 
@@ -246,6 +309,15 @@ With multiple developers (constrained by single sketch):
 - [P] tasks = different files or truly independent sections; same-file [P] means no logical dependency only
 - Panel firmware `scripts/011_button_panel_ui.cpp` is **out of scope** (no tasks)
 - Full decalc UI on panel is **out of scope**; only main→panel `DC1`/`DC0` + USB service `DC0`
-- Protocol example `B3`→`SS1` in ready-steam does **not** apply — `SS1` from handle only
-- Commit after each task or logical group when implementing
-- Stop at any checkpoint to validate story independently on stand
+- Protocol example `B3`→`SS1` in ready-steam does **not** apply — `SS1` from handle only (or immediately after `HS0` if handle already open)
+- `coolOrReady()` лише cancel/`idle` — **не** з `SS0` і **не** з падіння Tt у `STEAM_FLOW`
+- T048 (flow pause on cold) is **obsolete** — implement T056 instead
+- Brew-flow > steam-flow > base; option **C**: 4×/2.5× + FF during flow (B 3×/2× без FF — мало на стенді)
+- Commit after each delta task or logical group
+- **T059 desk-check (2026-11-11)**: session-3 FSM/selector code-complete; gains later raised in Phase 11.
+- **Phase 11 (option C)**: brew `20/0.20` + FF 20 %; steam `12.5/0.125` + FF 12 %; FF only in brew-`FLOW` / `STEAM_FLOW`.
+  - **SC-006 / S4 step 9 (FR-026)**: `STEAM_FLOW` has no Tt-drop → `HS1`/`SS0`/pause branch (T056); pulses continue via `STEAM_PULSE_*` while handle open; heater stays on `TARGET_STEAM`. Auto-`HS1` only in `STEAM_READY` with handle closed (T057).
+  - **SC-006 pulse/OLED/close**: handle open → `SS1` + pulse ON/OFF @ `STEAM_PULSE_PCT`; OLED `OPEN`; close → pump 0 + `SS0` → `STEAM_READY` (not `coolOrReady`).
+  - **T041 follow-ups (defaults drift in Tunables, not Phase 10 logic)**: `STEAM_PULSE_ON_MS=300` vs contract/SC-006 **500**; `STEAM_IDLE_EXIT_MS=5000` vs contract/T042 **3000**.
+- **T052**: closed by T059 desk-check of Phase 10 S4 subset; remaining physical S1–S6 / SC-001…SC-010 → **T040**
+- Phase 8 **T039–T041 resumed** after T059

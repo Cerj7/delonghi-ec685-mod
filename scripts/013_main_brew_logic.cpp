@@ -72,11 +72,13 @@
 // --- Temperatures (°C) ---
 // Потенціометр A1: проти годинникової → TARGET_MIN_C (холодний стан / нагрів OFF),
 // за годинниковою → TARGET_MAX_C. FR-001.
-const float TARGET_MIN_C = 20.0f;       // Низький край потенціометра еспресо
-const float TARGET_MAX_C = 100.0f;      // Верхній край потенціометра еспресо
+const float TARGET_MIN_C = 30.0f;       // Низький край потенціометра еспресо
+const float TARGET_MAX_C = 110.0f;      // Верхній край потенціометра еспресо
 const float TARGET_OFF_BAND_C = 1.0f;   // Біля мінімуму = нагрів OFF (не тримати 20 °C)
 const float STEAM_TARGET_C = 120.0f;    // Ціль пару (FR-009, FR-013)
-const float STEAM_READY_BAND_C = 2.0f;  // ± смуга миттєвого HS0 без READY_HOLD_MS (SC-005)
+// FR-011: HS0 = Tt ≥ STEAM_TARGET_C (без верхньої смуги). STEAM_READY_BAND_C не
+// використовується для HS0; залишено для сумісності (див. contracts/tunable-constants.md).
+const float STEAM_READY_BAND_C = 0.0f;
 const float READY_BAND_C = 1.0f;        // ± допуск готовності еспресо / після LT1 (FR-002)
 const float HEATER_DEADBAND_C = 0.5f;   // Мертва зона ПІ (інтеграл «замерзає»)
 // FR-013 / FR-018 / T032: один cutoff вище STEAM_TARGET_C (research §4) — PI тримає ~120 °C,
@@ -89,11 +91,11 @@ const float TEMP_VALID_MAX_C = 200.0f;  // Верхня правдоподібн
 const unsigned long READY_HOLD_MS = 1000;            // Утримання в смузі перед HE0/LT0 (FR-002, SC-001)
 const unsigned long PREINFUSION_MS = 2000;           // Тривалість преінфузії (FR-004, SC-002)
 const unsigned long PREINFUSION_PAUSE_MS = 2000;     // Пауза після преінфузії (FR-004, SC-002)
-const unsigned long STEAM_PULSE_ON_MS = 500;         // Імпульс помпи пару ON (SC-006)
+const unsigned long STEAM_PULSE_ON_MS = 300;         // Імпульс помпи пару ON (SC-006)
 const unsigned long STEAM_PULSE_OFF_MS = 1000;       // Імпульс помпи пару OFF (SC-006)
-// Idle у HS0 → LT1. 0 = вимкнено: після HS0 чекаємо ручку або B3 (без авто-охолодження).
-// Раніше 3000 мс робило пар непридатним: поки береш пітчер — уже STEAM_COOL і ручка ігнорується.
-const unsigned long STEAM_IDLE_EXIT_MS = 0;
+// FR-014 / SC-007: idle у HS0 (ручка закрита, без кнопок) → LT1. 0 = вимкнено.
+// Дефолт 3000 мс — contracts/tunable-constants.md.
+const unsigned long STEAM_IDLE_EXIT_MS = 5000;
 const unsigned long HEATER_WINDOW_MS = 1000;         // Вікно часового ШІМ ТЕНу
 const unsigned long CONTROL_INTERVAL_MS = 100;       // Період перерахунку ПІ
 const unsigned long BLOCK_TEMP_INTERVAL_MS = 250;    // Опитування MAX6675 (≥220 мс)
@@ -106,14 +108,21 @@ const unsigned long BUTTON_REACT_MAX_MS = 300;       // Цільовий SLA з�
 const unsigned long TIMING_TOLERANCE_MS = 200;       // Допуск стендових перевірок (SC-002/SC-007)
 
 // --- Powers (%) ---
-const uint8_t PREINFUSION_PCT = 40;   // Преінфузія (FR-004, SC-002)
+const uint8_t PREINFUSION_PCT = 80;   // Преінфузія (FR-004, SC-002)
 const uint8_t STEAM_PULSE_PCT = 100;  // Імпульс пари (SC-006)
 const uint8_t PUMP_OFF_PCT = 0;       // Явний «стоп» помпи
 
 // --- PI / pots / dimmer ---
 // Kp: %/°C; Ki: %/(°C·с); Ti = Kp/Ki ≈ 100 с. Калібрувати docs/thermoblock-pi-heater.md.
-const float HEATER_KP = 5.0f;
-const float HEATER_KI = 0.05f;
+// Три профілі (FR-027 / SC-010, stand → C): base · brew-flow (4× + FF) · steam-flow (2.5× + FF).
+const float HEATER_KP = 5.0f;         // Базовий ПІ Kp
+const float HEATER_KI = 0.05f;        // Базовий ПІ Ki
+const float HEATER_KP_BREW = 20.0f;   // Brew-flow Kp (4× base) — лише BrewPhase==FLOW (FR-027)
+const float HEATER_KI_BREW = 0.20f;   // Brew-flow Ki (4× base) (FR-027)
+const uint8_t HEATER_FF_BREW_PCT = 20;  // Адитивний FF % під час brew FLOW (FR-027)
+const float HEATER_KP_STEAM = 12.5f;  // Steam-flow Kp (2.5× base) — увесь STEAM_FLOW (FR-027)
+const float HEATER_KI_STEAM = 0.125f; // Steam-flow Ki (2.5× base) (FR-027)
+const uint8_t HEATER_FF_STEAM_PCT = 12; // Адитивний FF % під час STEAM_FLOW (FR-027)
 const uint8_t POT_SAMPLES = 8;                 // Усереднення АЦП
 const float POT_SMOOTHING = 0.3f;              // EMA потенціометрів (0…1)
 const uint8_t DIMMER_HYSTERESIS = 2;           // Гістерезис рівня диммера
@@ -485,12 +494,12 @@ bool espressoReadyCriterion(unsigned long now) {
   return false;
 }
 
-// Steam HS0: |Tt − STEAM_TARGET_C| ≤ STEAM_READY_BAND_C — миттєво, без hold.
+// Steam HS0: Tt ≥ STEAM_TARGET_C — миттєво, без hold і без верхньої смуги (FR-011, SC-005).
 bool steamReadyCriterion() {
   if (!tempValid || isnan(tempBlockC)) {
     return false;
   }
-  return fabs(tempBlockC - STEAM_TARGET_C) <= STEAM_READY_BAND_C;
+  return tempBlockC >= STEAM_TARGET_C;
 }
 
 void showFaultOled() {
@@ -646,13 +655,30 @@ void updateHeaterControl(unsigned long now) {
     return;
   }
 
+  // FR-027 / SC-010: профіль кожен CONTROL_INTERVAL_MS (≤ 1 тік).
+  // brew-flow лише (BREW_1|BREW_2) && FLOW; steam-flow лише STEAM_FLOW; інакше base.
+  // FF адитивний лише під час flow; без target-offset; SAFETY_CUTOFF_C спільний (вище).
+  float kp = HEATER_KP;
+  float ki = HEATER_KI;
+  float ffPct = 0.0f;
+  if ((machineState == BREW_1 || machineState == BREW_2) &&
+      brewPhase == BREW_PHASE_FLOW) {
+    kp = HEATER_KP_BREW;
+    ki = HEATER_KI_BREW;
+    ffPct = (float)HEATER_FF_BREW_PCT;
+  } else if (machineState == STEAM_FLOW) {
+    kp = HEATER_KP_STEAM;
+    ki = HEATER_KI_STEAM;
+    ffPct = (float)HEATER_FF_STEAM_PCT;
+  }
+
   const float error = activeTargetC - tempBlockC;
   const float dt = (float)dtMs / 1000.0f;
-  const float p = HEATER_KP * error;
+  const float p = kp * error;
 
   // Інтегратор: у мертвій зоні «замерзає» — шум термопари не накопичується.
   if (fabs(error) >= HEATER_DEADBAND_C) {
-    float iNext = heaterIntegral + HEATER_KI * error * dt;
+    float iNext = heaterIntegral + ki * error * dt;
     if (iNext < 0.0f) {
       iNext = 0.0f;
     }
@@ -662,14 +688,14 @@ void updateHeaterControl(unsigned long now) {
 
     // Anti-windup: якщо вихід у насиченні й похибка «розганяє» його далі —
     // інтеграл не накопичуємо (інакше після виходу з насичення буде перегрів).
-    const float raw = p + iNext;
+    const float raw = p + iNext + ffPct;
     if ((raw > 100.0f && error > 0.0f) || (raw < 0.0f && error < 0.0f)) {
       iNext = heaterIntegral;
     }
     heaterIntegral = iNext;
   }
 
-  float output = p + heaterIntegral;
+  float output = p + heaterIntegral + ffPct;
   if (output < 0.0f) {
     output = 0.0f;
   }
@@ -887,7 +913,8 @@ void sendToPanel(const char *code) {
   Serial.println(code);
 }
 
-// After steam cancel (B3 @ HS1/HS0) or SS0: espresso pot target, then cool or heat/ready.
+// After steam cancel (B3 @ HS1/HS0) or idle STEAM_IDLE_EXIT_MS: espresso pot
+// target, then cool or heat/ready. MUST NOT call from SS0 / auto-reheat.
 // contracts/main-fsm.md — coolOrReady()
 void coolOrReady() {
   // FR-018: FAULT latched until power cycle — never auto-recover via coolOrReady
@@ -960,10 +987,25 @@ void stopBrew2() {
   machineState = ESPRESSO_READY;
 }
 
-// FR-009 / FR-013 / T026: B3 @ ESPRESSO_READY → HS1, STEAM_HEAT, activeTargetC=STEAM_TARGET_C.
-void startSteamHeat() {
+// FR-009 / FR-025 / T044 / T050: enter / return to steam (ESPRESSO_READY or STEAM_COOL via B3).
+// contracts/main-fsm.md — enterSteam()
+void enterSteam() {
+  // FR-018: FAULT latched until power cycle — never enter steam from fault
+  if (machineState == FAULT) {
+    return;
+  }
+
+  setTargetMode(TARGET_STEAM);  // activeTargetC = STEAM_TARGET_C
+
+  // FR-009 / FR-011: Tt ≥ STEAM_TARGET_C → HS0 immediately (no band/hold); else HS1.
+  if (steamReadyCriterion()) {
+    sendToPanel("HS0");
+    machineState = STEAM_READY;
+    steamReadySinceMs = millis();  // reset idle clock
+    return;
+  }
+
   sendToPanel("HS1");
-  setTargetMode(TARGET_STEAM);
   machineState = STEAM_HEAT;
 }
 
@@ -1019,7 +1061,8 @@ void onPanelButton(char code) {
       } else if (code == '2') {
         startBrew2();
       } else if (code == '3') {
-        startSteamHeat();
+        // FR-009 / T044: B3 → enterSteam() (HS0 if already hot, else HS1)
+        enterSteam();
       }
       break;
 
@@ -1049,16 +1092,23 @@ void onPanelButton(char code) {
       // FR-021 / T029: B3 @ HS0 → coolOrReady() immediately; MUST NOT SS1
       if (code == '3') {
         coolOrReady();
+      } else {
+        // FR-014 / T049: any button event breaks inactivity → reset idle clock
+        // (FR-022: B1/B2 still do not change mode / pump / indication)
+        steamReadySinceMs = millis();
       }
-      // FR-022 / T031: B1/B2 ignore in all steam/cool states
       break;
 
     case STEAM_FLOW:
-      // FR-022 / T031: ignore B1/B2; ignore B3 during SS1
+      // FR-022: ignore B1/B2; ignore B3 only during SS1 / STEAM_FLOW
       break;
 
     case STEAM_COOL:
-      // FR-022 / T031: ignore B1/B2/B3 during LT1…LT0
+      // FR-025 / SC-009 / T050: B3 → enterSteam() (interrupt cool; HS0 if hot else HS1)
+      // FR-022: B1/B2 still ignored in cool
+      if (code == '3') {
+        enterSteam();
+      }
       break;
 
     case ESPRESSO_HEAT:
@@ -1103,19 +1153,36 @@ void updateMachineState(unsigned long now) {
       // FR-013 / T032: PI → STEAM_TARGET_C у loop (activeTargetC), до HS0 / cancel
       setPumpPercent(PUMP_OFF_PCT);
       setTargetMode(TARGET_STEAM);
-      // FR-011 / SC-005 / T027: |Tt−STEAM_TARGET_C|≤STEAM_READY_BAND_C → HS0 одразу (без READY_HOLD_MS)
+      // FR-011 / SC-005 / T043: Tt ≥ STEAM_TARGET_C → HS0 одразу (без READY_HOLD_MS, без верхньої смуги)
+      // FR-026 / T045: якщо ручка вже відкрита — одразу resume SS1 / STEAM_FLOW
       if (steamReadyCriterion()) {
         sendToPanel("HS0");
         machineState = STEAM_READY;
         steamReadySinceMs = now;
+        if (isSteamHandleOpen()) {
+          sendToPanel("SS1");
+          machineState = STEAM_FLOW;
+          steamPulsePhase = STEAM_PULSE_PHASE_ON;
+          steamPulsePhaseStartMs = now;
+          setPumpPercent(STEAM_PULSE_PCT);
+        }
       }
       break;
     case STEAM_READY:
       // FR-019: steam-ready idle — помпа PUMP_OFF_PCT
-      // FR-013 / T032: утримувати PI біля STEAM_TARGET_C до idle LT1 / B3 / handle
+      // FR-013 / T032 / T046: PI на STEAM_TARGET_C (ручка open/closed) до idle/cancel
       setPumpPercent(PUMP_OFF_PCT);
       setTargetMode(TARGET_STEAM);
-      // FR-012 / SC-006 / T029: handle open → SS1 / STEAM_FLOW (priority over idle)
+      // FR-026 / T057: auto-HS1 ONLY when handle closed AND Tt < STEAM_TARGET_C.
+      // Open handle falls through to SS1 / STEAM_FLOW (never reheat-pause from ready).
+      // STEAM_FLOW has no auto-HS1 on temp drop (T056).
+      if (!isSteamHandleOpen() && !steamReadyCriterion()) {
+        sendToPanel("HS1");
+        machineState = STEAM_HEAT;
+        break;
+      }
+      // FR-012 / SC-006 / T029: handle open → SS1 / STEAM_FLOW (priority over idle;
+      // FR-014 / T049: open handle / STEAM_FLOW pauses idle; close restarts clock)
       if (isSteamHandleOpen()) {
         sendToPanel("SS1");
         machineState = STEAM_FLOW;
@@ -1125,28 +1192,31 @@ void updateMachineState(unsigned long now) {
         setPumpPercent(STEAM_PULSE_PCT);
         break;
       }
-      // FR-014 / SC-007 / T029: closed idle STEAM_IDLE_EXIT_MS → LT1 / STEAM_COOL
-      // (вихід з парової цілі: TARGET_ESPRESSO — PI більше не тримає 120 °C).
-      // STEAM_IDLE_EXIT_MS==0 → авто-вихід вимкнено (лише B3 / ручка).
+      // FR-014 / SC-007 / T049: count STEAM_IDLE_EXIT_MS only with handle closed
+      // and no button events (B1/B2 reset steamReadySinceMs in onPanelButton).
+      // On expiry → same cool path as cancel (coolOrReady → LT1/STEAM_COOL or
+      // LT0). STEAM_IDLE_EXIT_MS==0 → авто-вихід вимкнено (лише B3 / ручка).
       if (STEAM_IDLE_EXIT_MS > 0 &&
           (now - steamReadySinceMs) >= STEAM_IDLE_EXIT_MS) {
-        setTargetMode(TARGET_ESPRESSO);
-        sendToPanel("LT1");
-        machineState = STEAM_COOL;
-        resetReadyHold();
+        coolOrReady();
       }
       break;
     case STEAM_FLOW:
-      // FR-013 / T032: під час SS1 імпульсів теж тримати STEAM_TARGET_C (до SS0/cool)
+      // FR-013 / T032: під час SS1 імпульсів теж тримати STEAM_TARGET_C
+      // (steam-flow PI уже вибрано в updateHeaterPi — T054)
       setTargetMode(TARGET_STEAM);
-      // FR-015 / SC-006 / T030: handle close → SS0, pump 0, coolOrReady()
-      // (MUST NOT return to idle HS0 / STEAM_IDLE_EXIT_MS)
+      // FR-015 / SC-006 / T047: handle close → SS0, pump 0 → STEAM_READY + idle
+      // (MUST NOT coolOrReady)
       if (!isSteamHandleOpen()) {
         setPumpPercent(PUMP_OFF_PCT);
         sendToPanel("SS0");
-        coolOrReady();
+        machineState = STEAM_READY;
+        steamReadySinceMs = now;  // start/continue idle timer after flow
         break;
       }
+      // FR-026 / SC-006 / T056: Tt < STEAM_TARGET_C → STAY in STEAM_FLOW.
+      // MUST NOT send HS1/SS0 or pause pump solely due to temp drop (T048 removed).
+      // Pulse continues below; heater keeps steam-flow PI toward STEAM_TARGET_C.
       // FR-012 / SC-006: STEAM_PULSE_ON_MS @ STEAM_PULSE_PCT / STEAM_PULSE_OFF_MS @ 0
       if (steamPulsePhase == STEAM_PULSE_PHASE_ON) {
         setPumpPercent(STEAM_PULSE_PCT);
