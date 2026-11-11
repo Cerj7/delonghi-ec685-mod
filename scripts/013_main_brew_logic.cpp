@@ -12,8 +12,8 @@
 //      від кімнатної / холодного стану (20 °C) до 100 °C — максимум.
 //   2. ПІ-регулятор за термопарою термоблоку (MAX6675 #1, CS = A2) керує
 //      SSR ТЕНу (D4, HIGH = нагрів) часовим ШІМ з вікном 1 с.
-//   3. На OLED: Tt — температура термоблоку, P — ПОТОЧНА потужність ТЕНу (%),
-//      дрібним шрифтом S — задана температура.
+//   3. На OLED: лише флоуметр (імпульси / мл) і статус ручки пари (OPEN/CLOSE).
+//      FAULT — окремий екран. Tt / ТЕН % / уставка — у Serial.
 //   4. Потенціометр помпи (A0) керує диммером помпи — так само, як у 005.
 //      На екран потужність помпи НЕ виводиться (лише в Serial).
 //   5. Кнопки не зчитуються і нічого не запускають.
@@ -728,52 +728,41 @@ void updateTemperature(unsigned long now) {
 // ---------------------------------------------------------------------------
 // OLED
 // ---------------------------------------------------------------------------
-// FR-008 / SC-004 / T021: brew layout — water counter, Tt, pump % @ BREW_DISPLAY_INTERVAL_MS.
-void showBrewOled() {
+// На екрані лише флоуметр + статус ручки пари (OPEN/CLOSE). Tt/P/% — у Serial.
+// Під час BREW_* оновлення з BREW_DISPLAY_INTERVAL_MS (SC-004 cadence).
+void showStatusOled() {
   if (!displayOk) {
     return;
   }
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
+  display.setTextSize(2);
 
   const uint32_t pulses = getFlowPulses();
 
-  // Рядок 1 — лічильник води (імпульси або мл через FLOW_PULSES_PER_ML).
+  // Рядок 1 — флоуметр (імпульси або мл через FLOW_PULSES_PER_ML).
   display.setCursor(0, 0);
-  display.print(F("W="));
   if (FLOW_PULSES_PER_ML > 0.0f) {
     display.print(flowDisplayValue(pulses), 1);
     display.print(F("ml"));
   } else {
+    display.print(F("F="));
     display.print(pulses);
   }
 
-  // Рядок 2 — температура термоблоку.
-  display.setCursor(0, 10);
-  display.print(F("Tt="));
-  if (isnan(tempBlockC)) {
-    display.print(F("---"));
-  } else {
-    display.print(tempBlockC, 1);
-    display.print(F("C"));
-  }
-
-  // Рядок 3 — поточна потужність помпи (%); OPEN = ручка пари.
-  display.setCursor(0, 20);
-  display.print(F("Pp="));
-  display.print(pumpCommandPct);
-  display.print(F("%"));
+  // Рядок 2 — ручка пари (FR-024: OPEN при відкритій; CLOSE — закрита).
+  display.setCursor(0, 16);
   if (isSteamHandleOpen()) {
-    display.print(F(" OPEN"));
+    display.print(F("OPEN"));
+  } else {
+    display.print(F("CLOSE"));
   }
 
   display.display();
 }
 
 void updateOled(unsigned long now) {
-  // T021 / T025 / FR-008: BREW_1 and BREW_2 share showBrewOled @ BREW_DISPLAY_INTERVAL_MS.
   const bool brewDisplay = (machineState == BREW_1 || machineState == BREW_2);
   const unsigned long interval =
       brewDisplay ? BREW_DISPLAY_INTERVAL_MS : OLED_INTERVAL_MS;
@@ -787,58 +776,7 @@ void updateOled(unsigned long now) {
     return;
   }
 
-  if (brewDisplay) {
-    showBrewOled();
-    return;
-  }
-
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-
-  // Рядок 1 (великий) — температура термоблоку.
-  // «!» у кінці = показання невалідне (обрив, конфлікт на шині) → ТЕН OFF.
-  display.setTextSize(2);
-  display.setCursor(0, 0);
-  display.print(F("Tt="));
-  if (isnan(tempBlockC)) {
-    display.print(F("---"));
-  } else {
-    display.print(tempBlockC, 1);
-    display.print(F("C"));
-  }
-  if (!tempValid) {
-    display.print(F("!"));
-  }
-
-  // Рядок 2 (великий) — поточна потужність ТЕНу
-  display.setCursor(0, 16);
-  display.print(F("P="));
-  display.print(heaterPercent);
-  display.print(F("%"));
-
-  // Рядок 3 (дрібний): зліва стан пару / OPEN ручки; справа уставка.
-  display.setTextSize(1);
-  display.setCursor(0, 24);
-  if (isSteamHandleOpen()) {
-    // Завжди видно відкриту ручку — і для подачі, і для діагностики полярності D10.
-    display.print(F("OPEN"));
-  } else if (machineState == STEAM_HEAT) {
-    display.print(F("HS"));
-  } else if (machineState == STEAM_READY) {
-    display.print(F("rdy"));
-  } else if (machineState == STEAM_FLOW) {
-    display.print(F("flow"));
-  } else if (machineState == STEAM_COOL) {
-    display.print(F("cool"));
-  }
-
-  char setText[8];
-  snprintf(setText, sizeof(setText), "S=%d", (int)(activeTargetC + 0.5f));
-  const int16_t setWidth = (int16_t)strlen(setText) * 6;
-  display.setCursor(SCREEN_WIDTH - setWidth, 24);
-  display.print(setText);
-
-  display.display();
+  showStatusOled();
 }
 
 // ---------------------------------------------------------------------------
