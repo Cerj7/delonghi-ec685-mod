@@ -14,10 +14,11 @@
 // Двобічний UART з основною Nano (контракт — docs/button-panel-protocol.md):
 //   D6 TX → D9 основної,  D5 RX ← D8 основної,  19200 8N1
 //   Панель → основна: B1 / B2 / B3  (фронт натискання)
-//   Основна → панель: HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 DC1 DC0
+//   Основна → панель: HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 LT1 LT0 DC1 DC0
 //
 // LED: початково всі вимкнені. Кілька LED одночасно — мультиплексування
 // по одному на такт сканування (~5 мс). Мигання — 300 мс on/off.
+// Подвійні блимки (LT1): 100 on / 100 off / 100 on / 500 pause.
 //
 // Бібліотеки: SoftwareSerial з AVR core.
 
@@ -47,12 +48,15 @@ const uint16_t SCAN_INTERVAL_MS = 5;
 const uint16_t SETTLE_US        = 20;
 const uint8_t  DEBOUNCE_SAMPLES = 3;     // 3 × 5 мс = 15 мс
 const uint16_t BLINK_HALF_MS    = 300;
+const uint16_t DBL_PULSE_MS     = 100;   // довжина одного блиму в парі
+const uint16_t DBL_GAP_MS       = 100;   // пауза між двома блимами
+const uint16_t DBL_PAUSE_MS     = 500;   // пауза перед наступною парою
 
 // ─────────────────────────── Таблиці ───────────────────────────
 
 enum LedId { LED_1, LED_2, LED_3, LED_4, LED_COUNT };
 
-enum LedVis { LED_OFF = 0, LED_SOLID = 1, LED_BLINK = 2 };
+enum LedVis { LED_OFF = 0, LED_SOLID = 1, LED_BLINK = 2, LED_BLINK_DOUBLE = 3 };
 
 struct LedDef {
   uint8_t anode;
@@ -203,10 +207,20 @@ void driveLed(uint8_t led) {
   pinMode(def.cathode, OUTPUT);
 }
 
+bool ledDoubleBlinkOn() {
+  const uint16_t period = (uint16_t)(DBL_PULSE_MS * 2u + DBL_GAP_MS + DBL_PAUSE_MS);
+  const uint16_t t = (uint16_t)(millis() % period);
+  if (t < DBL_PULSE_MS) return true;
+  if (t < (uint16_t)(DBL_PULSE_MS + DBL_GAP_MS)) return false;
+  if (t < (uint16_t)(DBL_PULSE_MS * 2u + DBL_GAP_MS)) return true;
+  return false;
+}
+
 bool ledShouldShow(uint8_t led) {
   const LedVis mode = ledMode[led];
   if (mode == LED_OFF) return false;
   if (mode == LED_SOLID) return true;
+  if (mode == LED_BLINK_DOUBLE) return ledDoubleBlinkOn();
   // LED_BLINK
   return ((millis() / BLINK_HALF_MS) & 1u) == 0u;
 }
@@ -380,6 +394,14 @@ void executeLinkCommand(const char *cmd) {
     steamSupplying = false;
     ledMode[LED_3] = LED_SOLID;
     refreshLed4();
+  } else if (strcmp(cmd, "LT1") == 0) {
+    steamHeating = false;
+    steamSupplying = false;
+    ledMode[LED_3] = LED_BLINK_DOUBLE;
+    refreshLed4();
+  } else if (strcmp(cmd, "LT0") == 0) {
+    ledMode[LED_3] = LED_OFF;
+    refreshLed4();
   } else if (strcmp(cmd, "DC1") == 0) {
     descalingNeeded = true;
     refreshLed4();
@@ -453,6 +475,7 @@ void printStatus() {
     Serial.print('=');
     if (ledMode[i] == LED_OFF) Serial.print(F("off"));
     else if (ledMode[i] == LED_SOLID) Serial.print(F("on"));
+    else if (ledMode[i] == LED_BLINK_DOUBLE) Serial.print(F("dbl"));
     else Serial.print(F("blink"));
   }
   Serial.print(F(" | brew1="));
@@ -468,6 +491,6 @@ void printStatus() {
 }
 
 void printHelp() {
-  Serial.println(F("Лінк 19200: B1/B2/B3 → основна; ← HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 DC1 DC0"));
+  Serial.println(F("Лінк 19200: B1/B2/B3 → основна; ← HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 LT1 LT0 DC1 DC0"));
   Serial.println(F("USB: ті самі коди (локально) | S — статус | ? — довідка"));
 }

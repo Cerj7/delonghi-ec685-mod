@@ -1,2 +1,23 @@
 plotter_venv
 logs
+
+# C++ / Arduino build artifacts
+build/
+bin/
+obj/
+out/
+*.o
+*.so
+*.a
+*.elf
+*.hex
+*.exe
+*.dll
+.idea/
+*.log
+.env*
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/

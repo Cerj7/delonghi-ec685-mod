@@ -223,6 +223,7 @@ void executePcCommand(const char *cmd) {
     "HE1", "HE0",
     "P11", "P10", "P21", "P20",
     "HS1", "HS0", "SS1", "SS0",
+    "LT1", "LT0",
     "DC1", "DC0",
   };
 
@@ -245,7 +246,7 @@ void executePcCommand(const char *cmd) {
 }
 
 void printHelp() {
-  Serial.println(F("Команди на панель: HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 DC1 DC0"));
+  Serial.println(F("Команди на панель: HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 LT1 LT0 DC1 DC0"));
   Serial.println(F("A — авто-відповіді на B1/B2/B3 (увімк за замовч.) | M — лише ручні"));
   Serial.println(F("? — довідка | лінк D9←D6, D8→D5, 19200"));
 }
