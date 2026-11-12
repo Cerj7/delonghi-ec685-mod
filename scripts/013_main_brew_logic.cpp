@@ -75,15 +75,16 @@
 const float TARGET_MIN_C = 30.0f;       // Низький край потенціометра еспресо
 const float TARGET_MAX_C = 110.0f;      // Верхній край потенціометра еспресо
 const float TARGET_OFF_BAND_C = 1.0f;   // Біля мінімуму = нагрів OFF (не тримати 20 °C)
-const float STEAM_TARGET_C = 120.0f;    // Ціль пару (FR-009, FR-013)
+const float STEAM_TARGET_C = 130.0f;    // Ціль пару (FR-009, FR-013)
 // FR-011: HS0 = Tt ≥ STEAM_TARGET_C (без верхньої смуги). STEAM_READY_BAND_C не
 // використовується для HS0; залишено для сумісності (див. contracts/tunable-constants.md).
 const float STEAM_READY_BAND_C = 0.0f;
 const float READY_BAND_C = 1.0f;        // ± допуск готовності еспресо / після LT1 (FR-002)
 const float HEATER_DEADBAND_C = 0.5f;   // Мертва зона ПІ (інтеграл «замерзає»)
-// FR-013 / FR-018 / T032: один cutoff вище STEAM_TARGET_C (research §4) — PI тримає ~120 °C,
-// а ≥ SAFETY_CUTOFF_C → FAULT (ТЕН OFF). Не опускати ≤ STEAM_TARGET_C.
-const float SAFETY_CUTOFF_C = 130.0f;
+// Аварійний поріг перегріву термоблоку (FR-013 / FR-018 / T032): якщо Tt ≥ цього
+// значення → ТЕН OFF, помпа 0, OLED «FAULT», скидання лише power cycle.
+// Має бути строго вище STEAM_TARGET_C, інакше пар одразу потрапить у FAULT.
+const float SAFETY_CUTOFF_C = 145.0f;
 const float TEMP_VALID_MIN_C = 1.0f;    // Нижня правдоподібність термопари
 const float TEMP_VALID_MAX_C = 200.0f;  // Верхня правдоподібність термопари
 
@@ -91,8 +92,8 @@ const float TEMP_VALID_MAX_C = 200.0f;  // Верхня правдоподібн
 const unsigned long READY_HOLD_MS = 1000;            // Утримання в смузі перед HE0/LT0 (FR-002, SC-001)
 const unsigned long PREINFUSION_MS = 2000;           // Тривалість преінфузії (FR-004, SC-002)
 const unsigned long PREINFUSION_PAUSE_MS = 2000;     // Пауза після преінфузії (FR-004, SC-002)
-const unsigned long STEAM_PULSE_ON_MS = 300;         // Імпульс помпи пару ON (SC-006)
-const unsigned long STEAM_PULSE_OFF_MS = 1000;       // Імпульс помпи пару OFF (SC-006)
+const unsigned long STEAM_PULSE_ON_MS = 120;         // Імпульс помпи пару ON (SC-006)
+const unsigned long STEAM_PULSE_OFF_MS = 880;       // Імпульс помпи пару OFF (SC-006)
 // FR-014 / SC-007: idle у HS0 (ручка закрита, без кнопок) → LT1. 0 = вимкнено.
 // Дефолт 3000 мс — contracts/tunable-constants.md.
 const unsigned long STEAM_IDLE_EXIT_MS = 5000;
