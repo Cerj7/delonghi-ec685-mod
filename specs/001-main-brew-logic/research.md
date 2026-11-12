@@ -34,44 +34,48 @@
 
 **Alternatives considered**: Два різні cutoff залежно від режиму — можливо пізніше; для v1 достатньо одного підвищеного ліміту з коментарем.
 
-## 5. Профіль проливу
+## 5. Пролив: холодний пролив (`B1`) + еспресо (`B2`)
 
-**Decision**: `PREINFUSION_MS=2000`, `PREINFUSION_PCT=40`, `PREINFUSION_PAUSE_MS=2000`, далі `pumpPercent` з потенціометра до повторної тієї ж кнопки. Зупинка «чужою» кнопкою заборонена.
+**Decision** (clarify session 4, 2026-11-12 — supersedes «обидві кнопки = еспресо з преінфузією»):
+- **`B1` / `COLD_FLUSH`**: `P11` → помпа `COLD_FLUSH_MS=4000` @ `COLD_FLUSH_PCT=100`, **ТЕН OFF** → `P10` (або достроковий `B1` → `P10`). Індикація через наявні `P11`/`P10` (панель без змін).
+- Блок старту cold flush: активні `P21` / `HS1` / `SS1` / `LT1` (під час `HS0`/`SS0` `B1` веде в `LT1`, не в flush).
+- **`B2` / `BREW_2`**: єдине еспресо — `PREINFUSION_MS=2000` @ 40 % → пауза 2000 → pot power до повторного `B2`. Зупинка «чужою» кнопкою заборонена; `B1` під час `P21` ігнорується.
 
-**Rationale**: FR-004…007, SC-002/003.
+**Rationale**: FR-004…007, SC-002/003; промив групи без нагріву; `B1` більше не дублює `B2`.
 
-**Alternatives considered**: Автостоп за об’ємом — out of scope (ручна зупинка).
+**Alternatives considered**: Автостоп за об’ємом — out of scope; окремий код панелі для flush — відхилено (панель зараз не міняємо); cold flush без `P11` — відхилено (користувач обрав A).
 
-## 6. Пар: idle, ручка, імпульси, `HS0`
+## 6. Пар: ручка, імпульси, вихід у `LT1`
 
-**Decision** (clarify session 2 + **session 3**, 2026-11-11 — supersedes earlier idle=0 / close→cool / ±2 band / flow-pause-on-cold):
-- Готовність пару: **`Tt ≥ STEAM_TARGET_C`** (120 °C). Без `READY_HOLD_MS`, без симетричної смуги 118…122; Tt > 122 °C — валідне `HS0`. `STEAM_READY_BAND_C` не використовується для критерію.
-- Після `HS0` машина тримає ціль `STEAM_TARGET_C` до idle→`LT1` або cancel.
-- Падіння `Tt < STEAM_TARGET_C` у **`STEAM_READY` (ручка закрита)** → авто `HS1` (не `coolOrReady`); після знову `≥ target` → `HS0`; якщо ручка вже відкрита на `HS0` — одразу `SS1`.
-- Падіння `Tt < STEAM_TARGET_C` у **`STEAM_FLOW`** → **залишитись** у flow: імпульси без паузи, **без** `HS1`/`SS0`; ТЕН гріє steam-flow профілем (session 3).
-- Подача від ручки: `SS1` / імпульси `500`/`1000` @ 100 %; закриття → `SS0`, помпа 0 → **назад у `STEAM_READY`** (не миттєвий cool); стартує/продовжує idle.
-- Idle **`STEAM_IDLE_EXIT_MS=3000`**: ручка закрита + немає кнопок → `LT1`, ціль пару знімається. Відкрита ручка скидає/паузить таймер. `0` лишається опцією Tunable (вимкнути авто-вихід).
-- `B3` у `HS0`/`HS1` → `coolOrReady()` (не `SS1`); `B3` у `STEAM_COOL` → `enterSteam()` (`HS0`/`HS1`); `B1`/`B2` ігнор у парових/cool фазах.
-- Вхід з еспресо-готовності: якщо вже `Tt ≥ target` — одразу `HS0`, інакше `HS1`.
+**Decision** (session 2–3 + **session 4**, 2026-11-12 — supersedes idle→`LT1` і `B3`-cancel):
+- Готовність пару: **`Tt ≥ STEAM_TARGET_C`** (120 °C). Без `READY_HOLD_MS`, без симетричної смуги 118…122; Tt > 122 °C — валідне `HS0`.
+- Після `HS0` машина тримає ціль `STEAM_TARGET_C`, **доки** не надійде `B1` або `B2` → `LT1` / `coolOrReady()`.
+- Падіння `Tt < STEAM_TARGET_C` у **`STEAM_READY` (ручка закрита)** → авто `HS1`; після знову `≥ target` → `HS0`; якщо ручка вже відкрита на `HS0` — одразу `SS1`.
+- Падіння `Tt < STEAM_TARGET_C` у **`STEAM_FLOW`** → залишитись у flow: імпульси без паузи, **без** `HS1`/`SS0`; ТЕН — steam-flow.
+- Подача від ручки: `SS1` / імпульси `500`/`1000` @ 100 %; закриття → `SS0`, помпа 0 → **назад у `STEAM_READY`** (не миттєвий cool).
+- **`STEAM_IDLE_EXIT_MS=0`**: idle-автовихід **вимкнено** назавжди для цієї фічі (session 4 option B).
+- **`B3` у `HS1`/`HS0`/`SS*` ігнорується** (не cancel). `B3` у `STEAM_COOL` → `enterSteam()`.
+- **`B1`/`B2` у `HS1`/`HS0`/`SS1`/`SS0`** → єдиний вихід у `LT1`.
+- Індикація `LT1`: чинний протокол (LED3 double-blink); LED1+LED2 **не** вимагаємо (панель без змін).
+- **`STEAM_COOL` (FR-028)**: ТЕН OFF; відкрита ручка → ті самі імпульси; ready criterion еспресо → помпа 0 навіть якщо ручка відкрита → `LT0`.
 - OLED: `OPEN` при відкритій ручці; мітки `HS`/`rdy`/`cool`.
 - `FAULT` → ТЕН OFF, помпа 0; вихід v1 лише power cycle.
 
-**Rationale**: Spec FR-009…015, FR-021/022/024–027, SC-005…010; користувач: під час відкритої ручки помпа має працювати імпульсно навіть нижче 120 °C; авто-`HS1` лише з закритою ручкою.
+**Rationale**: FR-009…015, FR-021/022/024–028, SC-005…011; користувач: вихід з пару лише кнопками еспресо; активне охолодження ручкою.
 
-**Alternatives considered**: `B3` як старт подачі — відхилено; hold перед `HS0` — відхилено; симетрична ±2 °C — відхилено; idle=0 — скасовано session 2; миттєвий cool на закриття — відхилено; «липке» `HS0` — відхилено; пауза помпи/`HS1` під час `STEAM_FLOW` при Tt < target — **відхилено session 3** (ламає збивання молока).
+**Alternatives considered**: `B3`-cancel / idle→`LT1` — **відхилено session 4**; LED1+LED2 для `LT1` — відхилено (немає можливості міняти панель зараз); пауза помпи в `STEAM_FLOW` при холодному Tt — відхилено session 3; ПІ до уставки в cool — відхилено (обрано ТЕН OFF).
 
-## 6b. Агресивні ПІ-профілі під час проливу / пару
+## 6b. ПІ-профілі: heat-up + brew/steam flow
 
-**Decision** (clarify session 3 + stand retune option **C**, 2026-11-11):
-- Три tunable профілі: **base** (`HEATER_KP`/`HEATER_KI` = 5.0/0.05), **brew-flow** (4× → 20.0/0.20 + `HEATER_FF_BREW_PCT=20`), **steam-flow** (2.5× → 12.5/0.125 + `HEATER_FF_STEAM_PCT=12`).
-- Brew-flow активний **лише** у фазі основного проливу (`FLOW` після паузи); преінфузія/пауза = base (FF=0).
-- Steam-flow активний увесь час `STEAM_FLOW` (+ FF).
-- Цілі без offset; FF — невеликий адитивний % до виходу ПІ під час flow; brew > steam > base; `SAFETY_CUTOFF_C` спільний.
-- Стенд: option B (3×/2× без FF) **недостатньо** → C.
+**Decision** (session 3 option C + **session 4** heat-up):
+- **Чотири** tunable профілі: **heat-up** (`HEATER_KP_HEAT`/`HEATER_KI_HEAT`, > base) у `ESPRESSO_HEAT` / `STEAM_HEAT`; **base** (5.0/0.05) idle/ready/preinfuse/pause; **brew-flow** (4× + FF) лише `FLOW` у `BREW_2`; **steam-flow** (2.5× + FF) увесь `STEAM_FLOW`.
+- Cold flush і `STEAM_COOL` — ТЕН примусово OFF (профіль не застосовується).
+- Цілі без offset; критерії `HE0`/`HS0` **без змін**; короткочасний overshoot ~+3…5 °C OK (нижче `SAFETY_CUTOFF_C`); heat-up Kp/Ki — стендовий тюнінг.
+- Стенд session 3: 3×/2× без FF мало → C (4×/2.5× + FF) для flow.
 
-**Rationale**: FR-027 / SC-010; еспресо проливає більший об’єм води; практичний тест показав просідання при 3×/2× без FF.
+**Rationale**: FR-027 / SC-010/012; швидший розігрів без послаблення готовності; користувач допустив невеликий overshoot.
 
-**Alternatives considered**: Глобальне підняття Kp/Ki — відхилено; target-offset — відхилено; bang-bang — відхилено; brew на весь `BREW_*` — відхилено; brew=steam — відхилено; **B: 3×/2× без FF** — відхилено після стенду (мало).
+**Alternatives considered**: Лише підняти base Kp — відхилено; послабити `HE0` до `Tt ≥ target` — відхилено; target-offset — відхилено; зміна панелі під нову індикацію — відхилено.
 
 ## 7. Декальцинація (EEPROM, uptime)
 
