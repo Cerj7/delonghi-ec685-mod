@@ -95,8 +95,8 @@ const unsigned long PREINFUSION_PAUSE_MS = 2000;     // Пауза після п
 const unsigned long STEAM_PULSE_ON_MS = 110;         // Імпульс помпи пару ON (SC-006)
 const unsigned long STEAM_PULSE_OFF_MS = 880;       // Імпульс помпи пару OFF (SC-006)
 // FR-014 / SC-007: idle у HS0 (ручка закрита, без кнопок) → LT1. 0 = вимкнено.
-// Дефолт 3000 мс — contracts/tunable-constants.md.
-const unsigned long STEAM_IDLE_EXIT_MS = 5000;
+// Дефолт 10000 мс — contracts/tunable-constants.md.
+const unsigned long STEAM_IDLE_EXIT_MS = 10000;
 const unsigned long HEATER_WINDOW_MS = 1000;         // Вікно часового ШІМ ТЕНу
 const unsigned long CONTROL_INTERVAL_MS = 100;       // Період перерахунку ПІ
 const unsigned long BLOCK_TEMP_INTERVAL_MS = 250;    // Опитування MAX6675 (≥220 мс)
