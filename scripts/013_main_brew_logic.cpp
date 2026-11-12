@@ -92,7 +92,7 @@ const float TEMP_VALID_MAX_C = 200.0f;  // Верхня правдоподібн
 const unsigned long READY_HOLD_MS = 1000;            // Утримання в смузі перед HE0/LT0 (FR-002, SC-001)
 const unsigned long PREINFUSION_MS = 2000;           // Тривалість преінфузії (FR-004, SC-002)
 const unsigned long PREINFUSION_PAUSE_MS = 2000;     // Пауза після преінфузії (FR-004, SC-002)
-const unsigned long STEAM_PULSE_ON_MS = 120;         // Імпульс помпи пару ON (SC-006)
+const unsigned long STEAM_PULSE_ON_MS = 110;         // Імпульс помпи пару ON (SC-006)
 const unsigned long STEAM_PULSE_OFF_MS = 880;       // Імпульс помпи пару OFF (SC-006)
 // FR-014 / SC-007: idle у HS0 (ручка закрита, без кнопок) → LT1. 0 = вимкнено.
 // Дефолт 3000 мс — contracts/tunable-constants.md.
@@ -118,12 +118,12 @@ const uint8_t PUMP_OFF_PCT = 0;       // Явний «стоп» помпи
 // Три профілі (FR-027 / SC-010, stand → C): base · brew-flow (4× + FF) · steam-flow (2.5× + FF).
 const float HEATER_KP = 5.0f;         // Базовий ПІ Kp
 const float HEATER_KI = 0.05f;        // Базовий ПІ Ki
-const float HEATER_KP_BREW = 20.0f;   // Brew-flow Kp (4× base) — лише BrewPhase==FLOW (FR-027)
-const float HEATER_KI_BREW = 0.20f;   // Brew-flow Ki (4× base) (FR-027)
-const uint8_t HEATER_FF_BREW_PCT = 20;  // Адитивний FF % під час brew FLOW (FR-027)
-const float HEATER_KP_STEAM = 12.5f;  // Steam-flow Kp (2.5× base) — увесь STEAM_FLOW (FR-027)
-const float HEATER_KI_STEAM = 0.125f; // Steam-flow Ki (2.5× base) (FR-027)
-const uint8_t HEATER_FF_STEAM_PCT = 12; // Адитивний FF % під час STEAM_FLOW (FR-027)
+const float HEATER_KP_BREW = 25.0f;   // Brew-flow Kp (4× base) — лише BrewPhase==FLOW (FR-027)
+const float HEATER_KI_BREW = 0.25f;   // Brew-flow Ki (4× base) (FR-027)
+const uint8_t HEATER_FF_BREW_PCT = 25;  // Адитивний FF % під час brew FLOW (FR-027)
+const float HEATER_KP_STEAM = 20.0f;  // Steam-flow Kp (2.5× base) — увесь STEAM_FLOW (FR-027)
+const float HEATER_KI_STEAM = 0.20f; // Steam-flow Ki (2.5× base) (FR-027)
+const uint8_t HEATER_FF_STEAM_PCT = 20; // Адитивний FF % під час STEAM_FLOW (FR-027)
 const uint8_t POT_SAMPLES = 8;                 // Усереднення АЦП
 const float POT_SMOOTHING = 0.3f;              // EMA потенціометрів (0…1)
 const uint8_t DIMMER_HYSTERESIS = 2;           // Гістерезис рівня диммера
