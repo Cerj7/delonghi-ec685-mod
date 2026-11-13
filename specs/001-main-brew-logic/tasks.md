@@ -57,7 +57,7 @@
 
 **Goal**: Power-on espresso heat with `HE1`/`HE0`, ignore all buttons until ready
 
-**Independent Test**: Power board with temp pot set; ≤1 s see `HE1`; buttons do not start pump/steam; after `|Tt−target|≤READY_BAND_C` for `READY_HOLD_MS` → `HE0` (quickstart S1)
+**Independent Test**: Power board with temp pot set; ≤1 s see `HE1`; buttons do not start pump/steam; after `Tt≥target−READY_BAND_C` for `READY_HOLD_MS` → `HE0` even if overshoot (quickstart S1)
 
 ### Implementation for User Story 1
 
@@ -153,7 +153,7 @@
 - [X] T038 [P] Update `readme.md` to list `013_main_brew_logic.cpp` and link `docs/main-brew-logic.md` / feature specs
 - [X] T039 Run magic-literal compliance check (`rg` for business literals like 120/2000/4000/40/500/1000/28/20.0/12.5/12.0/0.20/0.125/0.12 outside Tunables) on `scripts/013_main_brew_logic.cpp` per `contracts/tunable-constants.md` — після Phase 12 T078
 - [ ] T040 Execute quickstart scenarios S1–S7 on dual-Nano stand; fix timing/SLA gaps against SC-001…SC-012 — після Phase 12 T078; physical dual-Nano stand still required — *desk-check 2026-11-12: no serial devices; SLA logic fixes in 013 (heat-up only while Tt below target; fault clears P20/SS0; EEPROM defer in STEAM_COOL); Tunables drift synced in T041; physical S1–S7 still required*
-- [X] T041 [P] Sync any Tunables default drift back into `specs/001-main-brew-logic/contracts/tunable-constants.md` if defaults changed during stand tuning — після T078; T077 aligns pulse ON=500 / idle=0 first — **DONE 2026-11-12**: contract defaults = firmware Tunables (stand-tuned)
+- [X] T041 [P] Sync any Tunables default drift back into `specs/001-main-brew-logic/contracts/tunable-constants.md` if defaults changed during stand tuning — після T078; T077 aligns pulse ON=110 / idle=0 first — **DONE 2026-11-12**: contract defaults = firmware Tunables (stand-tuned)
 
 ---
 
@@ -263,7 +263,7 @@
 - [X] T074 [US1] In `updateHeaterPi` of `scripts/013_main_brew_logic.cpp`: select heat-up (`HEATER_KP_HEAT`/`HEATER_KI_HEAT`) for `ESPRESSO_HEAT` and `STEAM_HEAT`; keep base for ready/preinfuse/pause/`STEAM_READY`; forced OFF for `COLD_FLUSH`/`STEAM_COOL`/`FAULT`; brew/steam-flow unchanged; no change to `HE0`/`HS0` criteria (FR-027, SC-010/012)
 - [X] T075 [P] [US4] Sync `docs/main-brew-logic.md` to session 4: cold flush, steam exit via B1/B2, idle=0, B3 ignore in HS/SS, LT1+handle pulses, four PI profiles, panel unchanged
 - [X] T076 [P] Update Phase 4/US2 wording leftovers in `specs/001-main-brew-logic/tasks.md` Notes only if needed; ensure `readme.md` still points at current docs (no panel change)
-- [X] T077 Align Tunables drift from T041 notes in `scripts/013_main_brew_logic.cpp`: `STEAM_PULSE_ON_MS` → contract **500** (unless stand retunes into contract); `STEAM_IDLE_EXIT_MS` → **0** (session 4)
+- [X] T077 Align Tunables drift from T041 notes in `scripts/013_main_brew_logic.cpp`: `STEAM_PULSE_ON_MS` → contract **110** (unless stand retunes into contract); `STEAM_IDLE_EXIT_MS` → **0** (session 4)
 - [X] T078 Desk-check / stand-validate quickstart S1–S4 + S7 against SC-001…SC-012 after T064–T074; then resume Phase 8 T039–T041 / T040 / T063 — **desk-check PASS** (enterSteam open-handle→SS1 + HE0 band/hold fixed); physical dual-Nano stand still needed for T040/T063
 
 **Checkpoint**: Session 4 behavior in `013`; physical stand → polish
@@ -366,6 +366,6 @@ Task: "T041 sync tunable-constants.md if stand-tuned"
 - T048 obsolete (Phase 10 T056); T028/T029 cancel-via-B3 superseded by T070
 - Commit after each delta task or logical group
 - **Phase 11 (option C)**: стартувало brew `20/0.20`+FF20 / steam `12.5/0.125`+FF12; **T041 stand-tune** → brew `25/0.25`+FF25 (~5×) / steam `20/0.20`+FF20 (~4×) — current defaults under Phase 12
-- **T041**: DONE — `tunable-constants.md` synced to firmware defaults (T077 pulse ON=500 / idle=0 kept)
+- **T041**: DONE — `tunable-constants.md` synced to firmware defaults (T077 pulse ON=110 / idle=0 kept)
 - **T052/T059/T063**: historical; remaining physical validation → **T078** then **T040**
 - Phase 8 **T039–T041** after Phase 12 T078

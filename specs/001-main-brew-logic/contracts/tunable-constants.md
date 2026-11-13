@@ -15,7 +15,7 @@
 | `TARGET_OFF_BAND_C` | 1.0 | Біля мінімуму = нагрів OFF |
 | `STEAM_TARGET_C` | 130.0 | Ціль пару; готовність `HS0` = `Tt ≥ STEAM_TARGET_C` (без верхньої межі) |
 | `STEAM_READY_BAND_C` | 0.0 | **Не використовується** для `HS0` (залишено для сумісності/майбутнього гістерезису; критерій односторонній ≥ target) |
-| `READY_BAND_C` | 1.0 | ± допуск готовності еспресо / після `LT1` (з hold) |
+| `READY_BAND_C` | 1.0 | Допуск: `HE0` = нижня (`Tt ≥ target − band`, без верхньої); `LT0` = верхня (`Tt ≤ target + band`) |
 | `HEATER_DEADBAND_C` | 0.5 | Мертва зона ПІ |
 | `HEAT_UP_OVERSHOOT_OK_C` | 5.0 | Документований допустимий короткочасний overshoot над ціллю під час/після heat-up (стенд; не окремий cutoff) |
 | `SAFETY_CUTOFF_C` | 145.0 | Аварійне вимкнення ТЕНу (строго вище `STEAM_TARGET_C`; ≥ пару і heat-up overshoot) |
@@ -26,11 +26,11 @@
 
 | Constant | Default | Used for |
 | --- | --- | --- |
-| `READY_HOLD_MS` | 1000 | Утримання в смузі перед `HE0`/`LT0` |
+| `READY_HOLD_MS` | 1000 | Утримання відповідного критерію перед `HE0` / `LT0` |
 | `COLD_FLUSH_MS` | 4000 | Тривалість холодного проливу (`B1`) |
 | `PREINFUSION_MS` | 2000 | Тривалість преінфузії (`B2`) |
 | `PREINFUSION_PAUSE_MS` | 2000 | Пауза після преінфузії |
-| `STEAM_PULSE_ON_MS` | 500 | Імпульс помпи пару / cool ON |
+| `STEAM_PULSE_ON_MS` | 110 | Імпульс помпи пару / cool ON |
 | `STEAM_PULSE_OFF_MS` | 880 | Імпульс помпи пару / cool OFF |
 | `STEAM_IDLE_EXIT_MS` | 0 | Idle→`LT1` **вимкнено** (session 4). `0 = вимкнено`. Залишено як Tunable на випадок стенду |
 | `HEATER_WINDOW_MS` | 1000 | Вікно часового ШІМ ТЕНу |

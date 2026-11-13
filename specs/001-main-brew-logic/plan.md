@@ -39,7 +39,7 @@
 
 **Project Type**: Embedded firmware (single sketch + docs)
 
-**Performance Goals**: Відповідь на кнопку ≤300 мс; OLED/лічильник під час проливу ≥2 Гц; еспресо-готовність ±1 °C / ≥1.0 с; пар-готовність `Tt ≥ STEAM_TARGET_C` миттєво; таймінги cold flush / преінфузії / імпульсів ±200 мс; перемикання ПІ-профілю ≤ одного `CONTROL_INTERVAL_MS`
+**Performance Goals**: Відповідь на кнопку ≤300 мс; OLED/лічильник під час проливу ≥2 Гц; `HE0`: `Tt ≥ target − 1 °C` / ≥1.0 с (без верхньої межі); `LT0`: `Tt ≤ target + 1 °C` / ≥1.0 с; пар-готовність `Tt ≥ STEAM_TARGET_C` миттєво; таймінги cold flush / преінфузії / імпульсів ±200 мс; перемикання ПІ-профілю ≤ одного `CONTROL_INTERVAL_MS`
 
 **Constraints**: Flash/RAM Nano; SoftwareSerial 19200 на D8/D9 (короткі кадри); захисний cutoff ТЕНу ≥ роботи на 120 °C і heat-up overshoot; помпа 0 % поза cold flush / brew-2 / паровими імпульсами (включно з `STEAM_COOL`+ручка); watchdog ~2 с; агресивні профілі не знімають `SAFETY_CUTOFF_C`; панель `011` без змін
 

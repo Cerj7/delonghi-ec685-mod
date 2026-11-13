@@ -10,7 +10,7 @@
 POWER_ON
    │ HE1, target = espresso pot
    ▼
-ESPRESSO_HEAT ──ready(±READY_BAND_C, READY_HOLD_MS)──► ESPRESSO_READY (HE0)
+ESPRESSO_HEAT ──ready(Tt ≥ target−READY_BAND_C, READY_HOLD_MS; no upper)──► ESPRESSO_READY (HE0)
    ▲                                                      │
    │ heater PI: heat-up                                   ├─ B1 → COLD_FLUSH (P11)
    │                                                      ├─ B2 → BREW_2 (P21)
@@ -92,10 +92,15 @@ FAULT
 
 **Не** викликати з закриття ручки (`SS0`), **не** з idle-таймера, **не** з `B3`, **не** з падіння Tt під час `STEAM_FLOW`.
 
-## Ready criterion (espresso)
+## Ready criteria (espresso)
 
-`|Tt - espressoTargetC| ≤ READY_BAND_C` continuously for `READY_HOLD_MS`  
-(Використовується для `HE0` і для `LT0`.)
+**`HE0` (heat-up / `ESPRESSO_HEAT`)**:  
+`Tt ≥ espressoTargetC − READY_BAND_C` continuously for `READY_HOLD_MS`.  
+**Без верхньої межі** — overshoot над уставкою валідний.
+
+**`LT0` (cool-down / `STEAM_COOL`)**:  
+`Tt ≤ espressoTargetC + READY_BAND_C` continuously for `READY_HOLD_MS`.  
+Одностороння верхня межа (дзеркало `HE0`); не ділити критерій `HE0`, інакше гарячий Tt одразу дав би `LT0`.
 
 ## Steam ready (`HS0`)
 

@@ -87,8 +87,8 @@
 
 | Field | Constant | Default |
 | --- | --- | --- |
-| onMs | `STEAM_PULSE_ON_MS` | 500 |
-| offMs | `STEAM_PULSE_OFF_MS` | 1000 |
+| onMs | `STEAM_PULSE_ON_MS` | 110 |
+| offMs | `STEAM_PULSE_OFF_MS` | 880 |
 | powerPct | `STEAM_PULSE_PCT` | 100 |
 | phase | enum | ON / OFF while handle open in `STEAM_FLOW` **або** `STEAM_COOL` |
 
@@ -130,13 +130,14 @@
 
 ## Validation Rules (cross-cutting)
 
-1. Espresso ready (`HE0`/`LT0`): `|Tt - espressoTargetC| ≤ READY_BAND_C` continuously for `READY_HOLD_MS`.
-2. Steam ready (`HS0`): `Tt ≥ STEAM_TARGET_C` → immediate (no `READY_HOLD_MS`, no upper band). In `STEAM_READY` with handle **closed**: if `Tt < STEAM_TARGET_C` → auto `STEAM_HEAT`; after recovery + handle already open → `SS1`. In `STEAM_FLOW`: Tt drop does **not** leave flow / pause pump.
-3. During `ESPRESSO_HEAT`: ignore `B1`/`B2`/`B3`.
-4. During `COLD_FLUSH`: only `B1` stops early; `B2`/`B3` ignored; heater forced OFF; duration `COLD_FLUSH_MS` @ 100 %.
-5. During `BREW_2`: only `B2` stops; `B1`/`B3` ignored; brew-flow PI only in phase `FLOW`.
-6. During `HS1`/`HS0`/`SS*`: `B1`/`B2` → `coolOrReady()` / `LT1`; `B3` ignored. No idle auto-exit (`STEAM_IDLE_EXIT_MS=0`).
-7. During `STEAM_COOL`: heater OFF; open handle → steam pulse; ready → pump 0 + `LT0` even if handle open; `B3` = `enterSteam()`; `B1`/`B2` do not start flush/brew.
-8. Pump MUST be 0% outside `COLD_FLUSH`, brew-2 FLOW/preinfuse, and steam/cool pulse ON phases.
-9. Fault forces heater OFF, pump 0, latch `FAULT` until **power cycle** (v1; no auto-recovery).
-10. Heater PI profile switches within ≤ one `CONTROL_INTERVAL_MS` when entering/leaving heat-up / `FLOW` / `STEAM_FLOW`.
+1. Espresso heat ready (`HE0`): `Tt ≥ espressoTargetC − READY_BAND_C` continuously for `READY_HOLD_MS` (no upper bound).
+2. Espresso cool ready (`LT0`): `Tt ≤ espressoTargetC + READY_BAND_C` continuously for `READY_HOLD_MS` (upper bound only).
+3. Steam ready (`HS0`): `Tt ≥ STEAM_TARGET_C` → immediate (no `READY_HOLD_MS`, no upper band). In `STEAM_READY` with handle **closed**: if `Tt < STEAM_TARGET_C` → auto `STEAM_HEAT`; after recovery + handle already open → `SS1`. In `STEAM_FLOW`: Tt drop does **not** leave flow / pause pump.
+4. During `ESPRESSO_HEAT`: ignore `B1`/`B2`/`B3`.
+5. During `COLD_FLUSH`: only `B1` stops early; `B2`/`B3` ignored; heater forced OFF; duration `COLD_FLUSH_MS` @ 100 %.
+6. During `BREW_2`: only `B2` stops; `B1`/`B3` ignored; brew-flow PI only in phase `FLOW`.
+7. During `HS1`/`HS0`/`SS*`: `B1`/`B2` → `coolOrReady()` / `LT1`; `B3` ignored. No idle auto-exit (`STEAM_IDLE_EXIT_MS=0`).
+8. During `STEAM_COOL`: heater OFF; open handle → steam pulse; cool-ready → pump 0 + `LT0` even if handle open; `B3` = `enterSteam()`; `B1`/`B2` do not start flush/brew.
+9. Pump MUST be 0% outside `COLD_FLUSH`, brew-2 FLOW/preinfuse, and steam/cool pulse ON phases.
+10. Fault forces heater OFF, pump 0, latch `FAULT` until **power cycle** (v1; no auto-recovery).
+11. Heater PI profile switches within ≤ one `CONTROL_INTERVAL_MS` when entering/leaving heat-up / `FLOW` / `STEAM_FLOW`.

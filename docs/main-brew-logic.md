@@ -38,7 +38,7 @@
 
 ```
 POWER_ON → HE1 → ESPRESSO_HEAT  // PI: heat-up
-                 │ ready(±READY_BAND_C, READY_HOLD_MS)
+                 │ ready(Tt ≥ target−READY_BAND_C, READY_HOLD_MS; no upper)
                  ▼
             ESPRESSO_READY (HE0)  // PI: base
                  ├─ B1 → COLD_FLUSH (P11): COLD_FLUSH_MS @ COLD_FLUSH_PCT; ТЕН OFF
@@ -58,7 +58,7 @@ POWER_ON → HE1 → ESPRESSO_HEAT  // PI: heat-up
                             │     B1/B2 → coolOrReady(); B3 → ignore
                             │     PI = steam-flow (~4× + FF)
                             └─ STEAM_COOL (LT1): ТЕН OFF; handle open → STEAM_PULSE_*
-                                  ready → pump 0 (навіть якщо ручка open) → LT0 → ESPRESSO_READY
+                                  cool-ready(Tt ≤ target+READY_BAND_C, hold) → pump 0 → LT0
                                   B3 → enterSteam(); B1/B2 → ignore (не flush / не brew)
 
 FAULT ← невалідна Tt / SAFETY_CUTOFF_C  (лише power cycle)

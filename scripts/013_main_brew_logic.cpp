@@ -79,7 +79,8 @@ const float STEAM_TARGET_C = 130.0f;    // Ціль пару (FR-009, FR-013)
 // FR-011: HS0 = Tt ≥ STEAM_TARGET_C (без верхньої смуги). STEAM_READY_BAND_C не
 // використовується для HS0; залишено для сумісності (див. contracts/tunable-constants.md).
 const float STEAM_READY_BAND_C = 0.0f;
-const float READY_BAND_C = 1.0f;        // ± допуск готовності еспресо / після LT1 (FR-002)
+// HE0: нижня межа (Tt ≥ target − band); верхньої немає. LT0: верхня (Tt ≤ target + band).
+const float READY_BAND_C = 1.0f;        // Допуск готовності еспресо / після LT1 (FR-002)
 const float HEATER_DEADBAND_C = 0.5f;   // Мертва зона ПІ (інтеграл «замерзає»)
 // FR-027: документований допустимий короткочасний overshoot над ціллю під час/
 // після heat-up (стенд; не окремий cutoff). Орієнтир ≤ цього; FAULT лише через
@@ -97,7 +98,7 @@ const unsigned long READY_HOLD_MS = 1000;            // Утримання в с
 const unsigned long COLD_FLUSH_MS = 4000;            // Тривалість холодного проливу B1 (FR-004)
 const unsigned long PREINFUSION_MS = 2000;           // Тривалість преінфузії (FR-004, SC-002)
 const unsigned long PREINFUSION_PAUSE_MS = 2000;     // Пауза після преінфузії (FR-004, SC-002)
-const unsigned long STEAM_PULSE_ON_MS = 500;         // Імпульс помпи пару ON (SC-006)
+const unsigned long STEAM_PULSE_ON_MS = 110;         // Імпульс помпи пару ON (SC-006)
 const unsigned long STEAM_PULSE_OFF_MS = 880;       // Імпульс помпи пару OFF (SC-006)
 // FR-014 / SC-007: Idle→LT1 вимкнено (session 4). 0 = вимкнено. Залишено як
 // Tunable на випадок стенду — contracts/tunable-constants.md.
@@ -452,8 +453,10 @@ void enforcePumpAuthority() {
 // ---------------------------------------------------------------------------
 // Уставки / ready / fault (data-model.md, contracts/main-fsm.md)
 // ---------------------------------------------------------------------------
-void setTargetMode(TargetMode mode) {
-  targetMode = mode;
+// Параметр — uint8_t, не TargetMode: Arduino IDE генерує прототипи до enum
+// у .ino, інакше «TargetMode was not declared in this scope».
+void setTargetMode(uint8_t mode) {
+  targetMode = static_cast<TargetMode>(mode);
   activeTargetC = (mode == TARGET_STEAM) ? STEAM_TARGET_C : espressoTargetC;
 }
 
@@ -466,16 +469,36 @@ void resetReadyHold() {
   readyBandSinceMs = 0;
 }
 
-// Espresso ready / LT0 (HE0 і STEAM_COOL): |Tt − target| ≤ READY_BAND_C
-// протягом READY_HOLD_MS (SC-001 / contracts/main-fsm.md). Без shortcut при
-// Tt ≥ target — heat-up overshoot (SC-010/012) не послаблює HE0.
+// HE0 (ESPRESSO_HEAT): Tt ≥ espressoTargetC − READY_BAND_C протягом READY_HOLD_MS.
+// Верхньої межі немає — heat-up overshoot не блокує готовність (FR-002 / SC-001).
 bool espressoReadyCriterion(unsigned long now) {
   if (!tempValid || isnan(tempBlockC)) {
     resetReadyHold();
     return false;
   }
 
-  if (fabs(tempBlockC - espressoTargetC) <= READY_BAND_C) {
+  if (tempBlockC >= espressoTargetC - READY_BAND_C) {
+    if (!readyBandLatched) {
+      readyBandLatched = true;
+      readyBandSinceMs = now;
+    }
+    return (now - readyBandSinceMs) >= READY_HOLD_MS;
+  }
+
+  resetReadyHold();
+  return false;
+}
+
+// LT0 (STEAM_COOL): Tt ≤ espressoTargetC + READY_BAND_C протягом READY_HOLD_MS.
+// Одностороння верхня межа — дзеркало HE0: «достатньо охололо» після пару (FR-028).
+// Не можна ділити критерій HE0: Tt ≫ target було б «готово» одразу після LT1.
+bool espressoCoolReadyCriterion(unsigned long now) {
+  if (!tempValid || isnan(tempBlockC)) {
+    resetReadyHold();
+    return false;
+  }
+
+  if (tempBlockC <= espressoTargetC + READY_BAND_C) {
     if (!readyBandLatched) {
       readyBandLatched = true;
       readyBandSinceMs = now;
@@ -1151,7 +1174,8 @@ void updateMachineState(unsigned long now) {
     case ESPRESSO_HEAT:
       // FR-019: heat idle — помпа завжди PUMP_OFF_PCT, pot A0 ігнорується
       setPumpPercent(PUMP_OFF_PCT);
-      // FR-002 / SC-001: hold in READY_BAND_C for READY_HOLD_MS → HE0 / ESPRESSO_READY
+      // FR-002 / SC-001: Tt ≥ target − READY_BAND_C for READY_HOLD_MS → HE0
+      // (no upper bound; overshoot OK)
       if (espressoReadyCriterion(now)) {
         sendToPanel("HE0");
         machineState = ESPRESSO_READY;
@@ -1266,7 +1290,8 @@ void updateMachineState(unsigned long now) {
       heaterGateOn = false;
 
       // Ready first: stop pulse even if handle still open (FR-028, SC-011).
-      if (espressoReadyCriterion(now)) {
+      // Cool criterion (upper band) — not HE0 one-sided lower.
+      if (espressoCoolReadyCriterion(now)) {
         setPumpPercent(PUMP_OFF_PCT);
         sendToPanel("LT0");
         machineState = ESPRESSO_READY;
