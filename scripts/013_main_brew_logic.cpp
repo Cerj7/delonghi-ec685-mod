@@ -16,8 +16,8 @@
 //      (TARGET_MIN_C…TARGET_MAX_C).
 //   2. ПІ-регулятор за термопарою термоблоку (MAX6675 #1, CS = A2) керує
 //      SSR ТЕНу (D4, HIGH = нагрів) часовим ШІМ з вікном 1 с.
-//   3. OLED (013): heat/ready FR-034 @ BREW_DISPLAY_INTERVAL_MS —
-//      T_now / T_tar / Heat / (P_now + P_tar); BREW_2 FR-008 — без P_tar;
+//   3. OLED (013): heat/ready FR-034 @ BREW_DISPLAY_INTERVAL_MS — 3 rows:
+//      T_now / (T_tar + Heat) / (P_now + P_tar); BREW_2 FR-008 — без P_tar;
 //      steam/cool FR-029 — T_now / Heat / V open|V close; cold flush —
 //      "Cold flush N s"; FAULT — fault.
 //   4. Потенціометр помпи (A0) → диммер; уставка також на OLED як P_tar
@@ -835,7 +835,8 @@ void showColdFlushOled(unsigned long now) {
   display.display();
 }
 
-// T089 / FR-034 / SC-017: ESPRESSO_HEAT / ESPRESSO_READY OLED — 5 values on 4 rows.
+// T089 / FR-034 / SC-017: ESPRESSO_HEAT / ESPRESSO_READY OLED — 5 values on 3 rows
+// (T_tar+Heat combined; P_now / P_tar spaced). Y = 0 / 12 / 24 for even gaps on 128×32.
 // Labels from contracts/tunable-constants.md § OLED labels (no raw Tt/S/H/Pp/Ps).
 // Pump row uses short aliases (width); routed from updateOled @ BREW_DISPLAY_INTERVAL_MS (T090).
 void showEspressoHeatReadyOled() {
@@ -857,29 +858,30 @@ void showEspressoHeatReadyOled() {
     display.print(F("C"));
   }
 
-  // Row 2 — T_target (activeTargetC == espressoTargetC in heat/ready).
-  display.setCursor(0, 8);
+  // Row 2 — T_target + Heat_power on one line (activeTargetC == espressoTargetC).
+  // Heat at x=72 — same column as P_tar; gap stays wide for 2–3 digit T_tar.
+  display.setCursor(0, 12);
   display.print(F("T_tar="));
   display.print((int)(activeTargetC + 0.5f));
-
-  // Row 3 — Heat_power (heaterPercent); short Heat.
-  display.setCursor(0, 16);
+  display.setCursor(72, 12);
   display.print(F("Heat="));
   display.print(heaterPercent);
   display.print(F("%"));
 
-  // Row 4 — Pump_current (pumpCommandPct) + Pump_target (potPumpPercent / A0).
+  // Row 3 — Pump_current (pumpCommandPct) + Pump_target (potPumpPercent / A0).
   display.setCursor(0, 24);
   display.print(F("P_now="));
   display.print(pumpCommandPct);
-  display.print(F(" P_tar="));
+  display.setCursor(72, 24);
+  display.print(F("P_tar="));
   display.print(potPumpPercent);
 
   display.display();
 }
 
 // T083 / T091 / FR-008 / SC-004: BREW_2 OLED — T_current, T_target, Heat_power,
-// Pump_current @ BREW_DISPLAY_INTERVAL_MS (no Pump_target; water counter N/A).
+// Pump_current on 3 rows (T_tar+Heat combined) @ BREW_DISPLAY_INTERVAL_MS
+// (no Pump_target; water counter N/A). Same Y = 0 / 12 / 24 as heat/ready.
 void showBrew2Oled() {
   if (!displayOk) {
     return;
@@ -899,18 +901,16 @@ void showBrew2Oled() {
     display.print(F("C"));
   }
 
-  // Row 2 — T_target (activeTargetC = espressoTargetC in BREW_2); short T_tar.
-  display.setCursor(0, 8);
+  // Row 2 — T_target + Heat_power on one line (same x=72 column as heat/ready).
+  display.setCursor(0, 12);
   display.print(F("T_tar="));
   display.print((int)(activeTargetC + 0.5f));
-
-  // Row 3 — Heat_power (heaterPercent); short Heat.
-  display.setCursor(0, 16);
+  display.setCursor(72, 12);
   display.print(F("Heat="));
   display.print(heaterPercent);
   display.print(F("%"));
 
-  // Row 4 — Pump_current (pumpCommandPct); short P_now. No Pump_target (FR-008).
+  // Row 3 — Pump_current (pumpCommandPct); short P_now. No Pump_target (FR-008).
   display.setCursor(0, 24);
   display.print(F("P_now="));
   display.print(pumpCommandPct);
