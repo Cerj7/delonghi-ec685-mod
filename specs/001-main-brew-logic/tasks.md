@@ -6,9 +6,9 @@
 
 **Tests**: Manual stand validation only (per research.md / quickstart.md). No automated unit/contract test tasks.
 
-**Organization**: Tasks are grouped by user story. **Phase 12 = CURRENT delta** (clarify session 4: steam exit B1/B2, cold flush, LT1 pulse-cool, heat-up PI); Phase 11 = option C done (T063 stand may remain); Phases 1–10 = baseline.
+**Organization**: Tasks are grouped by user story. **Phase 13 = CURRENT delta** (clarify 2026-11-15: dual steam 120/128, pot ranges, OLED layouts); Phase 12 = session 4 done; Phase 11 = option C; Phases 1–10 = baseline.
 
-**Delta scope (Phase 12)**: `scripts/013_main_brew_logic.cpp` + `docs/main-brew-logic.md` sync to session-4 plan/contracts (`BREW_1`→`COLD_FLUSH`, idle/`B3`-cancel off, FR-028, heat-up profile).
+**Delta scope (Phase 13)**: `scripts/013_main_brew_logic.cpp` + `docs/main-brew-logic.md` sync to 2026-11-15 plan/contracts (`STEAM_READY_TARGET_C`/`STEAM_FLOW_TARGET_C`, `PUMP_MIN/MAX_PCT`, OLED FR-008/029/033). **Не змінювати** стендові ПІ Kp/Ki/FF.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -234,7 +234,7 @@
 
 ---
 
-## Phase 12: Delta — Clarify session 4 (US1 + US2 + US3 + US4) 🔧 CURRENT
+## Phase 12: Delta — Clarify session 4 (US1 + US2 + US3 + US4) ✅ DONE
 
 **Purpose**: Підтягнути `013` до clarify 2026-11-12 session 4 / refreshed plan+contracts: вихід з пару лише `B1`/`B2`; `B1`=холодний пролив; `STEAM_COOL`+ручка→імпульси/ТЕН OFF; heat-up ПІ. Панель `011` **без змін**.
 
@@ -266,7 +266,40 @@
 - [X] T077 Align Tunables drift from T041 notes in `scripts/013_main_brew_logic.cpp`: `STEAM_PULSE_ON_MS` → contract **110** (unless stand retunes into contract); `STEAM_IDLE_EXIT_MS` → **0** (session 4)
 - [X] T078 Desk-check / stand-validate quickstart S1–S4 + S7 against SC-001…SC-012 after T064–T074; then resume Phase 8 T039–T041 / T040 / T063 — **desk-check PASS** (enterSteam open-handle→SS1 + HE0 band/hold fixed); physical dual-Nano stand still needed for T040/T063
 
-**Checkpoint**: Session 4 behavior in `013`; physical stand → polish
+**Checkpoint**: Session 4 behavior in `013`; physical stand → polish (superseded focus → Phase 13)
+
+---
+
+## Phase 13: Delta — Clarify 2026-11-15 (US1 + US2 + US3 + US4) 🔧 CURRENT
+
+**Purpose**: Підтягнути `013` до clarify/plan 2026-11-15: дві цілі пару (120/128), діапазони pot (85…105 °C, 50…100 %), OLED layouts (brew / cold flush countdown / steam+cool). Панель `011` **без змін**. Стендові ПІ **не чіпати**.
+
+**Goal**:
+1. `STEAM_READY_TARGET_C=120` / `STEAM_FLOW_TARGET_C=128`; `HS0`/auto-`HS1` на 120; `STEAM_FLOW` тримає 128; `SS0` → знову 120.
+2. `TARGET_MIN/MAX_C=85/105` (підтвердити); `PUMP_MIN/MAX_PCT=50/100` + мапінг A0.
+3. OLED `BREW_2`: Tt / уставка / ТЕН% / помпа% (FR-008).
+4. OLED `COLD_FLUSH`: «Cold flush N s» countdown (FR-033).
+5. OLED пар + `STEAM_COOL`: Tt / ТЕН% / `open`|`close` (FR-029).
+6. **MUST NOT** змінювати `HEATER_KP_*` / `HEATER_KI_*` / `HEATER_FF_*` у цій фазі.
+
+**Independent Test**: quickstart S2 (countdown), S3 (brew OLED + pump 50…100), S4 (120/128 + steam OLED), S7 (pot ranges) + SC-013…SC-016
+
+**Depends on**: Phase 12 code done; plan/contracts/data-model/quickstart refreshed by `/speckit-plan` 2026-11-15
+
+### Implementation delta
+
+- [X] T079 In Tunables of `scripts/013_main_brew_logic.cpp`: add `STEAM_READY_TARGET_C=120.0f`, `STEAM_FLOW_TARGET_C=128.0f`, `PUMP_MIN_PCT=50`, `PUMP_MAX_PCT=100`; keep/confirm `TARGET_MIN_C=85` / `TARGET_MAX_C=105`; ensure `SAFETY_CUTOFF_C > STEAM_FLOW_TARGET_C`; leave legacy `STEAM_TARGET_C` only as alias=`STEAM_READY_TARGET_C` or remove; **do not change** any `HEATER_KP_*`/`HEATER_KI_*`/`HEATER_FF_*` (FR-030/031/032, contracts/tunable-constants.md)
+- [X] T080 [US4] In `scripts/013_main_brew_logic.cpp`: replace single-steam-target usage so `enterSteam()` / `STEAM_HEAT` / `STEAM_READY` / steam-ready helper / auto-`HS1` use `STEAM_READY_TARGET_C` (120); on handle open → `STEAM_FLOW` set `activeTargetC=STEAM_FLOW_TARGET_C` (128); on handle close/`SS0` restore 120 (FR-009/011/012/015/026/032, SC-015)
+- [X] T081 [US4] In `STEAM_FLOW` of `scripts/013_main_brew_logic.cpp`: keep PI target 128 while handle open; Tt drop below 128 (or 120) MUST stay in flow with continuous pulses and no `HS1`/`SS0` (FR-026, SC-006)
+- [X] T082 [US3] In pot-read path of `scripts/013_main_brew_logic.cpp`: map pump pot A0 to `PUMP_MIN_PCT`…`PUMP_MAX_PCT` (50…100) the same way A1 maps to `TARGET_MIN_C`…`TARGET_MAX_C`; confirm espresso target stays 85…105 (FR-030/031, SC-014)
+- [X] T083 [US3] In OLED `BREW_2` path of `scripts/013_main_brew_logic.cpp`: every `BREW_DISPLAY_INTERVAL_MS` show current Tt, setpoint (`espressoTargetC`/`activeTargetC`), heater %, pump % — water counter NOT required on OLED (FR-008, SC-004)
+- [X] T084 [US2] In OLED `COLD_FLUSH` path of `scripts/013_main_brew_logic.cpp`: show countdown `Cold flush N s` where `N=ceil(remainingMs/1000)`; do not reuse brew-metrics layout (FR-033, SC-016)
+- [X] T085 [US4] In OLED path of `scripts/013_main_brew_logic.cpp` for `STEAM_HEAT`/`STEAM_READY`/`STEAM_FLOW`/`STEAM_COOL`: show Tt, heater % (0 in cool), and handle state `open` or `close` (FR-029, SC-013)
+- [X] T086 [P] Sync `docs/main-brew-logic.md` to 2026-11-15: dual steam targets, pot ranges, OLED layouts; note PI stand values left unchanged
+- [X] T087 Desk-check / stand-validate quickstart S2–S4 + S7 against SC-013…SC-016 (and still SC-001…SC-012) after T079–T085; then resume Phase 8 T040 physical dual-Nano — **desk-check PASS 2026-11-15** (S2–S4/S7 + SC-013…016 + SC-001…012 code paths OK after T079–T085); physical dual-Nano stand / T040 still pending (NO_SERIAL in this environment)
+- [X] T088 [P] Run magic-literal compliance `rg` on `scripts/013_main_brew_logic.cpp` for business literals 85/105/120/128/50 (pot/steam) outside Tunables per `contracts/tunable-constants.md`
+
+**Checkpoint**: 2026-11-15 behavior in `013`; T087 desk-check PASS; physical stand → T040 (SC-001…SC-016)
 
 ---
 
@@ -277,53 +310,50 @@
 - **Setup (Phase 1)**: Done
 - **Foundational (Phase 2)**: Done
 - **User Stories (Phase 3–7)**: Done (baseline; US2 brew-1 semantics **superseded** by Phase 12)
-- **Phase 9–11**: Done (code); T063 stand deferred into Phase 12/T078
-- **Phase 12 Delta (session 4)**: Done (T064–T078 desk-check); physical stand → T040/T063
-- **Polish (Phase 8)**: T037/T038/T039/T041 done; T040 physical stand still required
+- **Phase 9–12**: Done (code/desk-check); T040/T063 physical stand still open
+- **Phase 13 Delta (2026-11-15)**: CURRENT (T079–T088)
+- **Polish (Phase 8)**: T037/T038/T039/T041/T087 desk-check done; T040 physical dual-Nano still open
 
-### User Story Dependencies (Phase 12)
+### User Story Dependencies (Phase 13)
 
-- **US1**: T074 heat-up (after T064)
-- **US2**: T065–T068 cold flush (after T064); blocks old brew-1
-- **US3**: T069 brew-2-only PI selector (after T065/T066)
-- **US4**: T070–T073 steam exit + cool (after T064; T072 before T073)
-- **Docs/validate**: T075–T078 after code tasks
+- **Foundational Tunables**: T079 first (blocks all)
+- **US4**: T080 → T081 (targets); T085 OLED steam (after T079; can parallel with T083/T084)
+- **US3**: T082 pot pump range (after T079; also confirms TARGET 85…105)
+- **US3**: T083 brew OLED (after T079)
+- **US2**: T084 cold-flush OLED (after T079)
+- **Docs/validate**: T086 // T088 after code; T087 after T080–T085
 
-### Within Phase 12
+### Within Phase 13
 
-1. T064 Tunables → T065 rename → T066–T068 cold flush // T070–T071 steam buttons/idle
-2. T072 coolOrReady → T073 STEAM_COOL
-3. T074 heat-up PI (can parallel with T066–T073 after T064)
-4. T069 after rename/flush
-5. T075–T077 docs/drift → T078 validate → Phase 8
+1. T079 Tunables
+2. T080–T081 dual steam targets // T082 pot range // T083–T085 OLED (careful same-file sequencing)
+3. T086 docs // T088 magic-literal rg
+4. T087 desk-check → T040 physical stand
 
-### Parallel Opportunities (Phase 12)
+### Parallel Opportunities (Phase 13)
 
-- After T064: T066–T068 (US2) // T070–T071 (US4) // T074 (US1) on careful same-file sequencing
-- T075 docs // late code polish T077
-- T039 after Tunables settled (T064/T077)
+- After T079: T080–T081 (US4 targets) // T082 (pots) // T083 (brew OLED) // T084 (flush OLED) // T085 (steam OLED) — same file, sequential edits preferred
+- T086 docs // T088 rg after Tunables settled
 
 ---
 
-## Parallel Example: Phase 12
+## Parallel Example: Phase 13
 
 ```bash
-# After T064 Tunables:
-Task: "T065–T068 COLD_FLUSH in 013"
-Task: "T070–T071 B1/B2 exit + idle off in 013"
-Task: "T074 heat-up PI select in 013"
+# After T079 Tunables:
+Task: "T080–T081 dual steam 120/128 in 013"
+Task: "T082 PUMP_MIN/MAX map in 013"
+Task: "T083–T085 OLED layouts in 013"
 # Then:
-Task: "T072–T073 coolOrReady + STEAM_COOL pulses"
-Task: "T075 docs/main-brew-logic.md"
-Task: "T078 quickstart S1–S4/S7 desk-check"
+Task: "T086 docs/main-brew-logic.md"
+Task: "T088 magic-literal rg"
+Task: "T087 quickstart S2–S4/S7 desk-check"
 ```
 
-## Parallel Example: Polish (after Phase 12)
+## Parallel Example: Polish (after Phase 13)
 
 ```bash
-Task: "T039 magic-literal rg on 013 (incl. 4000 / heat gains)"
-Task: "T040 physical dual-Nano S1–S7 / SC-001…SC-012"
-Task: "T041 sync tunable-constants.md if stand-tuned"
+Task: "T040 physical dual-Nano S1–S7 / SC-001…SC-016"
 ```
 
 ---
@@ -332,21 +362,22 @@ Task: "T041 sync tunable-constants.md if stand-tuned"
 
 ### Current focus
 
-1. **Phase 12** T064→T078 (session 4 behavior)
-2. **Finish Phase 8**: T039 → T041; T040 physical dual-Nano stand (S1–S7)
-3. T063 absorbed into T078 / T040
+1. **Phase 13** T079→T088 (dual steam + pot ranges + OLED)
+2. **Finish Phase 8**: T040 physical dual-Nano stand (S1–S7 + SC-013…016)
+3. T063 absorbed into T040 (hold scenarios after Phase 13)
 
 ### MVP / prior delivery (historical)
 
 1. Setup + Foundational → US1…US5 baseline already landed
 2. Phase 9–11 = steam / PI / option C patches
 3. Phase 12 = session 4 UX/FSM rewrite (cold flush + steam exit + cool + heat-up)
+4. Phase 13 = 2026-11-15 dual steam targets + OLED/pot deltas
 
 ### Parallel Team Strategy (delta)
 
-1. Dev A: T064–T069 cold flush / brew-2 in `013`
-2. Dev B: T070–T074 steam exit / cool / heat-up in `013` (coordinate same file)
-3. Together: T075–T078 docs + desk-check → T039–T041
+1. Dev A: T079–T082 Tunables + steam targets + pot map in `013`
+2. Dev B: T083–T085 OLED layouts in `013` (coordinate same file)
+3. Together: T086–T088 docs + desk-check → T040
 
 ---
 
@@ -362,10 +393,12 @@ Task: "T041 sync tunable-constants.md if stand-tuned"
 - **Phase 4 / US2 (T017–T022)**: historical `BREW_1` + preinfusion wording — **superseded** by Phase 12 `COLD_FLUSH` (T065–T068); Phase 4 header/checkpoint stay as baseline archive
 - `P11`/`P10` = cold flush (не еспресо); sole espresso = `B2`/`P21`/`P20`
 - Phase 5 «same brew profile as US2» = historical (shared preinfusion machine); current sole espresso brew = US3/`BREW_2` only
-- Four PI profiles: heat-up > base; brew-flow ~5×+FF; steam-flow ~4×+FF; forced OFF in `COLD_FLUSH`/`STEAM_COOL`
+- Four PI profiles: heat-up > base; brew-flow / steam-flow = **стенд у прошивці**; forced OFF in `COLD_FLUSH`/`STEAM_COOL`; **Phase 13 MUST NOT retune Kp/Ki/FF**
 - T048 obsolete (Phase 10 T056); T028/T029 cancel-via-B3 superseded by T070
 - Commit after each delta task or logical group
-- **Phase 11 (option C)**: стартувало brew `20/0.20`+FF20 / steam `12.5/0.125`+FF12; **T041 stand-tune** → brew `25/0.25`+FF25 (~5×) / steam `20/0.20`+FF20 (~4×) — current defaults under Phase 12
-- **T041**: DONE — `tunable-constants.md` synced to firmware defaults (T077 pulse ON=110 / idle=0 kept)
-- **T052/T059/T063**: historical; remaining physical validation → **T078** then **T040**
-- Phase 8 **T039–T041** after Phase 12 T078
+- **Phase 11 (option C)**: historical table multipliers superseded by stand Tunables; do not revert in Phase 13
+- **T041**: DONE historically; after Phase 13 if Tunables drift → re-sync `tunable-constants.md` (already refreshed in plan)
+- **T052/T059/T063**: historical; T087 desk-check done; remaining physical validation → **T040**
+- **Phase 13**: dual steam `STEAM_READY_TARGET_C=120` / `STEAM_FLOW_TARGET_C=128`; pots 85…105 °C / 50…100 %; OLED FR-008/029/033
+- Cold flush OLED EN string `Cold flush N s` (ASCII SSD1306); UA only if Cyrillic font added later
+- Phase 8 **T040** after Phase 13 T087
