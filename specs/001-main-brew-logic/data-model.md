@@ -1,6 +1,6 @@
 # Data Model: Main Brew Logic (EC685)
 
-Оновлено після clarify 2026-11-15: dual steam targets, pot ranges, OLED layouts.
+Оновлено після clarify 2026-11-15: dual steam targets, pot ranges, OLED layouts; HE1/HE0 telemetry (FR-034) + shared OLED labels.
 
 ## Entities
 
@@ -10,14 +10,14 @@
 
 | Value | Meaning | Panel indication (typical) |
 | --- | --- | --- |
-| `ESPRESSO_HEAT` | Початковий / повторний розігрів еспресо (також одразу після power-on); heat-up ПІ | `HE1`… |
-| `ESPRESSO_READY` | Готовність до еспресо | після `HE0` або `LT0` |
+| `ESPRESSO_HEAT` | Початковий / повторний розігрів еспресо (також одразу після power-on); heat-up ПІ; OLED FR-034 | `HE1`… |
+| `ESPRESSO_READY` | Готовність до еспресо; OLED FR-034 (у т.ч. після cold flush / brew / `LT0`) | після `HE0` або `LT0` |
 | `COLD_FLUSH` | Холодний пролив / промив групи (`B1`); ТЕН OFF; OLED countdown | `P11`…`P10` |
-| `BREW_2` | Пролив 2 еспресо (преінфузія / пауза / пролив); OLED brew metrics | `P21`…`P20` |
+| `BREW_2` | Пролив 2 еспресо (преінфузія / пауза / пролив); OLED FR-008 labels | `P21`…`P20` |
 | `STEAM_HEAT` | Нагрів до `STEAM_READY_TARGET_C` (120 °C); heat-up ПІ | `HS1`… |
 | `STEAM_READY` | Пар готовий; утримання **120 °C**; ручка / авто-`HS1` (закрита); вихід лише `B1`/`B2` | `HS0` |
 | `STEAM_FLOW` | Подача пару (ручка відкрита); ціль **128 °C**; імпульси без паузи; steam-flow ПІ | `SS1` |
-| `STEAM_COOL` | Охолодження після `B1`/`B2` з пару; ТЕН OFF; OLED steam layout; `B3` → пар | `LT1`…`LT0` |
+| `STEAM_COOL` | Охолодження після `B1`/`B2` з пару; ТЕН OFF; OLED FR-029 (`Valve …`); `B3` → пар | `LT1`…`LT0` |
 | `FAULT` | Невалідна термопара / cutoff / аварія | дисплей аварії; ТЕН/помпа OFF |
 
 > Примітка імплементації: колишній `BREW_1` **перейменовано** в `COLD_FLUSH`.
@@ -72,19 +72,21 @@
 | brewPct | pot `A0` | `PUMP_MIN_PCT`…`PUMP_MAX_PCT` live after pause |
 | phase | enum | `PREINFUSE` \| `PAUSE` \| `FLOW` |
 | heaterProfile | derived | `PREINFUSE`/`PAUSE` → base; `FLOW` → brew-flow |
-| oled | brew metrics | Tt / setpoint / heater% / pump% |
+| oled | brew metrics | `T_current` / `T_target` / `Heat_power` / `Pump_current` (без `Pump_target`) |
 
 Лише для `BREW_2` (не для `COLD_FLUSH`).
 
 ### OledLayout
 
-| Context | Fields shown |
+| Context | Fields / labels (full \| short) |
 | --- | --- |
-| Idle / heat / ready (espresso) | Tt, heater%, setpoint (як `006`) |
-| `BREW_2` | Tt, setpoint, heater%, pump% |
+| `ESPRESSO_HEAT` / `ESPRESSO_READY` | FR-034: `T_current`\|`T_now`, `T_target`\|`T_tar`, `Heat_power`\|`Heat`, `Pump_current`\|`P_now` + `Pump_target`\|`P_tar` на 4-му рядку |
+| `BREW_2` | FR-008: `T_current`\|`T_now`, `T_target`\|`T_tar`, `Heat_power`\|`Heat`, `Pump_current`\|`P_now` |
 | `COLD_FLUSH` | «Cold flush N s» (або UA якщо шрифт дозволяє) |
-| Steam (`HS*`/`SS*`) + `STEAM_COOL` | Tt, heater%, `open`\|`close` |
+| Steam (`HS*`/`SS*`) + `STEAM_COOL` | FR-029: `T_current`\|`T_now`, `Heat_power`\|`Heat`, `Valve open`\|`Valve close` (коротко `V open`\|`V close`); у cool Heat=0 |
 | `FAULT` | fault message |
+
+**Rules**: заборонені сирі `Tt`/`S`/`H`/`Pp`/`Ps` і голі `open`/`close`; heat/ready/brew refresh ≥ `BREW_DISPLAY_INTERVAL_MS`; `Pump_current` = фактична команда; `Pump_target` = pot A0 (лише FR-034).
 
 ### PanelEvent / PanelCommand
 
@@ -155,7 +157,8 @@
 3. Steam ready (`HS0`): `Tt ≥ STEAM_READY_TARGET_C` (120) → immediate. In `STEAM_READY` handle closed: `Tt < 120` → auto `STEAM_HEAT`. In `STEAM_FLOW`: target 128; Tt drop does **not** leave flow / pause pump.
 4. During `ESPRESSO_HEAT`: ignore `B1`/`B2`/`B3`.
 5. During `COLD_FLUSH`: only `B1` stops early; heater OFF; OLED countdown; duration `COLD_FLUSH_MS` @ 100 %.
-6. During `BREW_2`: only `B2` stops; brew-flow PI only in phase `FLOW`; OLED brew metrics.
+6. During `BREW_2`: only `B2` stops; brew-flow PI only in phase `FLOW`; OLED FR-008 labels (no `Pump_target`).
+6b. During `ESPRESSO_HEAT` / `ESPRESSO_READY`: OLED FR-034 (5 values / 4 rows; includes `Pump_target`).
 7. During `HS1`/`HS0`/`SS*`: `B1`/`B2` → `coolOrReady()`; `B3` ignored; no idle auto-exit.
 8. During `STEAM_COOL`: heater OFF; open handle → pulse; cool-ready → pump 0 + `LT0`; OLED steam layout; `B3` = `enterSteam()`.
 9. Pump MUST be 0% outside `COLD_FLUSH`, brew-2 FLOW/preinfuse, and steam/cool pulse ON phases.

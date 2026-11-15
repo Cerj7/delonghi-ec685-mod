@@ -7,16 +7,22 @@
 // MachineState + shared helpers (T009: targets, ready hold, pump authority, fault;
 // T011: coolOrReady).
 //
-// Мета (006, до портування FSM):
-//   1. Потенціометр температури (A1) задає цільову температуру термоблоку:
-//      від кімнатної / холодного стану (20 °C) до 100 °C — максимум.
+// Мета (006, до портування FSM) — історичний базис; OLED labels нижче
+// superseded Phase 14 (FR-008/029/034). Актуальний словник:
+//   contracts/tunable-constants.md § OLED labels + contracts/main-fsm.md
+//   OLED authority — short: T_now / T_tar / Heat / P_now / P_tar /
+//   V open|V close (заборонено сирі Tt/S/H/Pp/Ps і голі open/close).
+//   1. Потенціометр температури (A1) задає цільову температуру термоблоку
+//      (TARGET_MIN_C…TARGET_MAX_C).
 //   2. ПІ-регулятор за термопарою термоблоку (MAX6675 #1, CS = A2) керує
 //      SSR ТЕНу (D4, HIGH = нагрів) часовим ШІМ з вікном 1 с.
-//   3. На OLED: Tt — температура термоблоку, P — ПОТОЧНА потужність ТЕНу (%),
-//      дрібним шрифтом S — задана температура.
-//   4. Потенціометр помпи (A0) керує диммером помпи — так само, як у 005.
-//      На екран потужність помпи НЕ виводиться (лише в Serial).
-//   5. Кнопки не зчитуються і нічого не запускають.
+//   3. OLED (013): heat/ready FR-034 @ BREW_DISPLAY_INTERVAL_MS —
+//      T_now / T_tar / Heat / (P_now + P_tar); BREW_2 FR-008 — без P_tar;
+//      steam/cool FR-029 — T_now / Heat / V open|V close; cold flush —
+//      "Cold flush N s"; FAULT — fault.
+//   4. Потенціометр помпи (A0) → диммер; уставка також на OLED як P_tar
+//      лише в ESPRESSO_HEAT / ESPRESSO_READY (FR-034).
+//   5. Кнопки / панель UART — FSM (див. MachineState).
 //   6. Watchdog 2 с: зависання → reset → ТЕН LOW, помпа 0.
 //   7. CS другої термопари (бачок, D11) не читається, але тримається HIGH —
 //      інакше конфлікт на спільній шині SO і Tt читається як 0.0.
@@ -114,7 +120,7 @@ const unsigned long MAX6675_BOOT_DELAY_MS = 500;     // Перша конвер�
 const unsigned long MS_PER_S = 1000UL;               // SI: мс → с (ПІ dt, decalc uptime)
 const unsigned long POT_INTERVAL_MS = 20;            // Опитування потенціометрів
 const unsigned long OLED_INTERVAL_MS = 200;          // Оновлення OLED (поза brew ≥2 Гц)
-const unsigned long BREW_DISPLAY_INTERVAL_MS = 500;  // Оновлення brew-дисплея (SC-004)
+const unsigned long BREW_DISPLAY_INTERVAL_MS = 500;  // OLED heat/ready/brew/flush (SC-004/016/017; FR-008/033/034)
 const unsigned long SERIAL_INTERVAL_MS = 500;        // Періодичний USB-лог
 const unsigned long WATCHDOG_TIMEOUT_MS = 2000;      // WDT (апаратно: WDTO_2S)
 const unsigned long BUTTON_REACT_MAX_MS = 300;       // Цільовий SLA зупинки (SC-003/SC-006; тест)
@@ -829,8 +835,51 @@ void showColdFlushOled(unsigned long now) {
   display.display();
 }
 
-// T083 / FR-008 / SC-004: BREW_2 OLED — Tt, setpoint, heater %, pump %
-// @ BREW_DISPLAY_INTERVAL_MS (water counter not required on OLED).
+// T089 / FR-034 / SC-017: ESPRESSO_HEAT / ESPRESSO_READY OLED — 5 values on 4 rows.
+// Labels from contracts/tunable-constants.md § OLED labels (no raw Tt/S/H/Pp/Ps).
+// Pump row uses short aliases (width); routed from updateOled @ BREW_DISPLAY_INTERVAL_MS (T090).
+void showEspressoHeatReadyOled() {
+  if (!displayOk) {
+    return;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  // Row 1 — T_current (tempBlockC); short T_now fits 128 px with decimals.
+  display.setCursor(0, 0);
+  display.print(F("T_now="));
+  if (isnan(tempBlockC)) {
+    display.print(F("---"));
+  } else {
+    display.print(tempBlockC, 1);
+    display.print(F("C"));
+  }
+
+  // Row 2 — T_target (activeTargetC == espressoTargetC in heat/ready).
+  display.setCursor(0, 8);
+  display.print(F("T_tar="));
+  display.print((int)(activeTargetC + 0.5f));
+
+  // Row 3 — Heat_power (heaterPercent); short Heat.
+  display.setCursor(0, 16);
+  display.print(F("Heat="));
+  display.print(heaterPercent);
+  display.print(F("%"));
+
+  // Row 4 — Pump_current (pumpCommandPct) + Pump_target (potPumpPercent / A0).
+  display.setCursor(0, 24);
+  display.print(F("P_now="));
+  display.print(pumpCommandPct);
+  display.print(F(" P_tar="));
+  display.print(potPumpPercent);
+
+  display.display();
+}
+
+// T083 / T091 / FR-008 / SC-004: BREW_2 OLED — T_current, T_target, Heat_power,
+// Pump_current @ BREW_DISPLAY_INTERVAL_MS (no Pump_target; water counter N/A).
 void showBrew2Oled() {
   if (!displayOk) {
     return;
@@ -840,9 +889,9 @@ void showBrew2Oled() {
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
 
-  // Рядок 1 — температура термоблоку.
+  // Row 1 — T_current (tempBlockC); short T_now.
   display.setCursor(0, 0);
-  display.print(F("Tt="));
+  display.print(F("T_now="));
   if (isnan(tempBlockC)) {
     display.print(F("---"));
   } else {
@@ -850,28 +899,29 @@ void showBrew2Oled() {
     display.print(F("C"));
   }
 
-  // Рядок 2 — уставка (activeTargetC = espressoTargetC у BREW_2).
+  // Row 2 — T_target (activeTargetC = espressoTargetC in BREW_2); short T_tar.
   display.setCursor(0, 8);
-  display.print(F("S="));
+  display.print(F("T_tar="));
   display.print((int)(activeTargetC + 0.5f));
 
-  // Рядок 3 — потужність ТЕНу (%).
+  // Row 3 — Heat_power (heaterPercent); short Heat.
   display.setCursor(0, 16);
-  display.print(F("H="));
+  display.print(F("Heat="));
   display.print(heaterPercent);
   display.print(F("%"));
 
-  // Рядок 4 — потужність помпи (%).
+  // Row 4 — Pump_current (pumpCommandPct); short P_now. No Pump_target (FR-008).
   display.setCursor(0, 24);
-  display.print(F("Pp="));
+  display.print(F("P_now="));
   display.print(pumpCommandPct);
   display.print(F("%"));
 
   display.display();
 }
 
-// T085 / FR-029 / SC-013: steam + STEAM_COOL OLED — Tt, heater %, open|close.
-// У STEAM_COOL ТЕН% MUST = 0 (FR-029 Option A).
+// T085 / T092 / FR-029 / SC-013: steam + STEAM_COOL OLED —
+// T_current, Heat_power, Valve open|close (short T_now / Heat / V open|V close).
+// У STEAM_COOL Heat_power MUST = 0 (FR-029 Option A).
 void showSteamOled() {
   if (!displayOk) {
     return;
@@ -884,9 +934,9 @@ void showSteamOled() {
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
 
-  // Рядок 1 — температура термоблоку.
+  // Row 1 — T_current (tempBlockC); short T_now.
   display.setCursor(0, 0);
-  display.print(F("Tt="));
+  display.print(F("T_now="));
   if (isnan(tempBlockC)) {
     display.print(F("---"));
   } else {
@@ -894,26 +944,28 @@ void showSteamOled() {
     display.print(F("C"));
   }
 
-  // Рядок 2 — потужність ТЕНу (%); у cool завжди 0.
+  // Row 2 — Heat_power (heaterPercent); short Heat; cool always 0.
   display.setCursor(0, 12);
-  display.print(F("H="));
+  display.print(F("Heat="));
   display.print(heaterPctShown);
   display.print(F("%"));
 
-  // Рядок 3 — стан ручки пари (FR-024 / FR-029).
+  // Row 3 — Valve open|close (FR-024 / FR-029); short V open|V close.
   display.setCursor(0, 24);
   if (isSteamHandleOpen()) {
-    display.print(F("open"));
+    display.print(F("V open"));
   } else {
-    display.print(F("close"));
+    display.print(F("V close"));
   }
 
   display.display();
 }
 
 void updateOled(unsigned long now) {
-  // T083 / T084: BREW_2 + COLD_FLUSH refresh @ BREW_DISPLAY_INTERVAL_MS.
-  const bool brewDisplay = (machineState == COLD_FLUSH || machineState == BREW_2);
+  // T083 / T084 / T090: heat/ready + BREW_2 + COLD_FLUSH @ BREW_DISPLAY_INTERVAL_MS.
+  const bool brewDisplay =
+      (machineState == ESPRESSO_HEAT || machineState == ESPRESSO_READY ||
+       machineState == COLD_FLUSH || machineState == BREW_2);
   const unsigned long interval =
       brewDisplay ? BREW_DISPLAY_INTERVAL_MS : OLED_INTERVAL_MS;
   if (!displayOk || now - lastOledMs < interval) {
@@ -923,6 +975,12 @@ void updateOled(unsigned long now) {
 
   if (machineState == FAULT) {
     showFaultOled();
+    return;
+  }
+
+  // T090 / FR-034 / SC-017: do not use legacy 006-style idle layout for these.
+  if (machineState == ESPRESSO_HEAT || machineState == ESPRESSO_READY) {
+    showEspressoHeatReadyOled();
     return;
   }
 
@@ -943,14 +1001,16 @@ void updateOled(unsigned long now) {
     return;
   }
 
+  // T095 fallback OLED (non-brew/steam/fault): shared short labels only
+  // (contracts/tunable-constants.md § OLED labels — no Tt/S/H/Pp/Ps).
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
 
-  // Рядок 1 (великий) — температура термоблоку.
+  // Рядок 1 — T_current (tempBlockC); short T_now.
   // «!» у кінці = показання невалідне (обрив, конфлікт на шині) → ТЕН OFF.
-  display.setTextSize(2);
   display.setCursor(0, 0);
-  display.print(F("Tt="));
+  display.print(F("T_now="));
   if (isnan(tempBlockC)) {
     display.print(F("---"));
   } else {
@@ -961,19 +1021,16 @@ void updateOled(unsigned long now) {
     display.print(F("!"));
   }
 
-  // Рядок 2 (великий) — поточна потужність ТЕНу
-  display.setCursor(0, 16);
-  display.print(F("P="));
+  // Рядок 2 — Heat_power (heaterPercent); short Heat.
+  display.setCursor(0, 12);
+  display.print(F("Heat="));
   display.print(heaterPercent);
   display.print(F("%"));
 
-  // Рядок 3 (дрібний): справа уставка (espresso idle / ready / heat).
-  display.setTextSize(1);
-  char setText[8];
-  snprintf(setText, sizeof(setText), "S=%d", (int)(activeTargetC + 0.5f));
-  const int16_t setWidth = (int16_t)strlen(setText) * 6;
-  display.setCursor(SCREEN_WIDTH - setWidth, 24);
-  display.print(setText);
+  // Рядок 3 — T_target (activeTargetC); short T_tar (fallback / non-espresso).
+  display.setCursor(0, 24);
+  display.print(F("T_tar="));
+  display.print((int)(activeTargetC + 0.5f));
 
   display.display();
 }

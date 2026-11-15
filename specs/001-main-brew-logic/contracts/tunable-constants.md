@@ -42,7 +42,7 @@
 | `MS_PER_S` | 1000 | SI: мс → с |
 | `POT_INTERVAL_MS` | 20 | Опитування потенціометрів |
 | `OLED_INTERVAL_MS` | 200 | Оновлення OLED (поза brew) |
-| `BREW_DISPLAY_INTERVAL_MS` | 500 | Оновлення brew/flush-дисплея (SC-004/016) |
+| `BREW_DISPLAY_INTERVAL_MS` | 500 | Оновлення OLED heat/ready/brew/flush (SC-004/016/017; FR-008/033/034) |
 | `SERIAL_INTERVAL_MS` | 500 | Періодичний USB-лог |
 | `WATCHDOG_TIMEOUT_MS` | 2000 | WDT |
 | `BUTTON_REACT_MAX_MS` | 300 | Цільовий SLA зупинки (тест) |
@@ -107,6 +107,23 @@
 | `Холодний пролив N сек` | Лише якщо підключено кириличний шрифт |
 
 `N = ceil(remainingMs / 1000)` у цілих секундах.
+
+## OLED labels (shared dictionary)
+
+Повний набір (ASCII). Short — якщо не вміщується по ширині 128 px (`textSize=1` ≈ 21 символ).
+
+| Full | Short | Meaning | Screens |
+| --- | --- | --- | --- |
+| `T_current` | `T_now` | Поточна Tt (°C) | FR-008, FR-029, FR-034 |
+| `T_target` | `T_tar` | Уставка температури (°C) | FR-008, FR-034 |
+| `Heat_power` | `Heat` | Потужність ТЕНу (%) | FR-008, FR-029, FR-034 |
+| `Pump_current` | `P_now` | Фактична команда помпи (%) | FR-008, FR-034 |
+| `Pump_target` | `P_tar` | Уставка помпи з pot A0 (%) | **лише FR-034** |
+| `Valve open` / `Valve close` | `V open` / `V close` | Стан ручки пари | FR-029 |
+
+**Layout FR-034** (4 рядки): `T_current` → `T_target` → `Heat_power` → (`Pump_current` + `Pump_target`). Рядок помпи MAY завжди використовувати short.
+
+**Заборонено** як labels: `Tt`, `S`, `H`, `Pp`, `Ps`, голі `open`/`close`.
 
 ## Compliance check (implementation)
 

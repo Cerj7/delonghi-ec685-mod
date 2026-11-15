@@ -1,6 +1,6 @@
 # Implementation Plan: Main Brew Logic (EC685)
 
-**Branch**: `001-main-brew-logic` | **Date**: 2026-11-15 (plan refresh after clarify session 2026-11-15) | **Spec**: [spec.md](./spec.md)
+**Branch**: `001-main-brew-logic` (артефакти; робоча git-гілка може відрізнятись) | **Date**: 2026-11-15 (plan refresh: HE1/HE0 OLED + shared labels) | **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/001-main-brew-logic/spec.md`
 
@@ -18,12 +18,18 @@
 - Закриття ручки: `SS0` → ціль знову 120 → `HS0` (не миттєвий cool).
 - Вихід з пару: лише `B1`/`B2` → `LT1`; idle-автовихід вимкнено; `B3` у `HS*`/`SS*` ігнорується; `B3`@`STEAM_COOL` → `enterSteam()`.
 
-**Clarify 2026-11-15 — delta**:
+**Clarify 2026-11-15 — delta (pot / steam / OLED layouts)**:
 1. **Не відкочувати** стендові ПІ Kp/Ki/FF у `013` (source of truth = Tunables у прошивці).
 2. **Діапазони pot**: температура `TARGET_MIN_C`…`TARGET_MAX_C` = **85…105 °C**; помпа `PUMP_MIN_PCT`…`PUMP_MAX_PCT` = **50…100 %**.
-3. **OLED `BREW_2`**: Tt / уставка / ТЕН% / помпа% (FR-008) — без обов’язкового лічильника води.
+3. **OLED `BREW_2`**: `T_current` / `T_target` / `Heat_power` / `Pump_current` (FR-008) — без `Pump_target`, без обов’язкового лічильника води.
 4. **OLED cold flush**: зворотний відлік «Cold flush N s» (EN fallback; UA якщо шрифт дозволяє) (FR-033).
-5. **OLED пар + `STEAM_COOL`**: Tt / ТЕН% / `open`|`close` (FR-029).
+5. **OLED пар + `STEAM_COOL`**: `T_current` / `Heat_power` / `Valve open`|`Valve close` (FR-029).
+
+**Clarify 2026-11-15 — delta (HE1/HE0 telemetry + shared labels)**:
+6. **OLED `ESPRESSO_HEAT` / `ESPRESSO_READY` (`HE1`/`HE0`)**: п’ять значень — `T_current`, `T_target`, `Heat_power`, `Pump_current` (команда; зазвичай 0), `Pump_target` (pot) (FR-034 / SC-017).
+7. **Layout 128×32**: 4 рядки — `T_current` → `T_target` → `Heat_power` → (`Pump_current` + `Pump_target` на одному рядку).
+8. **Спільний словник labels** (повний / short): `T_current`|`T_now`, `T_target`|`T_tar`, `Heat_power`|`Heat`, `Pump_current`|`P_now`, `Pump_target`|`P_tar`; пар: `Valve open`|`close` / `V open`|`V close`. Заборонені сирі `Tt`/`S`/`H`/`Pp`/`Ps` і голі `open`/`close`.
+9. Інтервал оновлення heat/ready/brew/flush: `BREW_DISPLAY_INTERVAL_MS` (0.5 с) де вимагає FR.
 
 ## Technical Context
 
@@ -39,11 +45,11 @@
 
 **Project Type**: Embedded firmware (single sketch + docs)
 
-**Performance Goals**: Відповідь на кнопку ≤300 мс; OLED під час brew/flush/steam ≥2 Гц (`BREW_DISPLAY_INTERVAL_MS` / `OLED_INTERVAL_MS`); `HE0`: `Tt ≥ target − 1 °C` / ≥1.0 с (без верхньої межі); `LT0`: `Tt ≤ target + 1 °C` / ≥1.0 с; пар-готовність `Tt ≥ STEAM_READY_TARGET_C` миттєво; таймінги cold flush / преінфузії / імпульсів ±200 мс; перемикання ПІ-профілю ≤ одного `CONTROL_INTERVAL_MS`
+**Performance Goals**: Відповідь на кнопку ≤300 мс; OLED heat/ready/brew/flush/steam ≥2 Гц (`BREW_DISPLAY_INTERVAL_MS` / `OLED_INTERVAL_MS`); `HE0`: `Tt ≥ target − 1 °C` / ≥1.0 с (без верхньої межі); `LT0`: `Tt ≤ target + 1 °C` / ≥1.0 с; пар-готовність `Tt ≥ STEAM_READY_TARGET_C` миттєво; таймінги cold flush / преінфузії / імпульсів ±200 мс; перемикання ПІ-профілю ≤ одного `CONTROL_INTERVAL_MS`
 
-**Constraints**: Flash/RAM Nano; SoftwareSerial 19200 на D8/D9; `SAFETY_CUTOFF_C` строго вище `STEAM_FLOW_TARGET_C` (128 °C) і heat-up overshoot; помпа 0 % поза cold flush / brew-2 / паровими імпульсами (включно з `STEAM_COOL`+ручка); watchdog ~2 с; панель `011` без змін; SSD1306 default font → cold-flush текст EN («Cold flush N s»), доки немає кириличного шрифту
+**Constraints**: Flash/RAM Nano; SoftwareSerial 19200 на D8/D9; `SAFETY_CUTOFF_C` строго вище `STEAM_FLOW_TARGET_C` (128 °C) і heat-up overshoot; помпа 0 % поза cold flush / brew-2 / паровими імпульсами (включно з `STEAM_COOL`+ручка); watchdog ~2 с; панель `011` без змін; SSD1306 default font → cold-flush текст EN («Cold flush N s») і ASCII OLED labels; 128×32 → heat/ready = 4 рядки (помпи спільно)
 
-**Scale/Scope**: 1 нова прошивка основної плати + docs; панель `011` без змін контракту; ~1 FSM з 9 станами; **4** ПІ-профілі; **2** парові температурні константи
+**Scale/Scope**: 1 нова прошивка основної плати + docs; панель `011` без змін контракту; ~1 FSM з 9 станами; **4** ПІ-профілі; **2** парові температурні константи; **3** espresso/steam OLED layouts + cold-flush countdown
 
 ## Constitution Check
 
@@ -54,26 +60,27 @@
 | Gate | Status | Notes |
 | --- | --- | --- |
 | I. Hardware Safety | PASS | Невалідна термопара / `SAFETY_CUTOFF_C` (>128 °C) → ТЕН OFF, помпа 0, `FAULT` до power cycle; cold flush і `STEAM_COOL` — ТЕН OFF |
-| II. Memory Efficiency | PASS | Немає `malloc`/`new` у loop; EEPROM буфер фіксованого розміру; статичні буфери UART / OLED рядків |
+| II. Memory Efficiency | PASS | Немає `malloc`/`new` у loop; EEPROM буфер фіксованого розміру; статичні буфери UART / OLED рядків (`F()`-рядки для labels) |
 | III. Deterministic Real-Time | PASS | FSM + `millis()`; без блокуючих `delay()` у керуванні; ISR лише короткий лічильник імпульсів |
 | IV. Maintainable & Modular | EXCEPTION | Монолітний `013` зі секціями (як `006`/`012`); див. Complexity Tracking |
 | Контракт панелі / Tunables / YAGNI DC UI | PASS | Коди з protocol без зміни `011`; усі °C/мс/%/Kp/Ki у Tunables; UI декальцинації out of scope |
 
-**Post-design re-check** (2026-11-15): PASS з задокументованим винятком IV. Dual steam targets / pot ranges / OLED layouts — лише Tunables + display path + `activeTargetC` selection; cutoff лишається вище 128 °C; панель без змін.
+**Post-design re-check** (2026-11-15, HE1/HE0 + labels): PASS з задокументованим винятком IV. Dual steam / pot ranges / FR-034 / shared OLED labels — лише Tunables + display path + `activeTargetC` / `potPumpPercent` на екрані; cutoff лишається вище 128 °C; панель без змін; Flash impact = довші `F()`-рядки labels (прийнятно).
 
-### Implementation delta (після plan refresh 2026-11-15)
+### Implementation delta (після plan refresh 2026-11-15 HE1/HE0)
 
-Код `scripts/013_main_brew_logic.cpp` частково вже має `TARGET_MIN/MAX=85/105` і стендові ПІ; ще потрібні зміни під нову spec. Після цього plan — синхронізувати Tunables + FSM + OLED за контрактами, потім `/speckit-tasks` (delta) або implement.
+Код `scripts/013_main_brew_logic.cpp` частково вже має brew/steam OLED і pot ranges; ще потрібні зміни під FR-034 і словник labels. Після цього plan — `/speckit-tasks` (delta) або implement.
 
 Ключові code deltas:
-1. Замінити єдиний `STEAM_TARGET_C` на `STEAM_READY_TARGET_C=120` + `STEAM_FLOW_TARGET_C=128`; `HS0` / auto-`HS1` на 120; у `STEAM_FLOW` / handle-open — `activeTargetC=128`; після `SS0` — знову 120.
-2. Додати `PUMP_MIN_PCT=50` / `PUMP_MAX_PCT=100`; мапінг A0 на цей діапазон (як A1 → `TARGET_MIN/MAX`).
-3. Підтвердити `TARGET_MIN_C=85` / `TARGET_MAX_C=105` у Tunables + контракті (не відкочувати).
-4. **Не змінювати** поточні `HEATER_KP_*` / `HEATER_KI_*` / `HEATER_FF_*` у прошивці.
-5. OLED `BREW_2`: Tt / setpoint / heater% / pump% (без обов’язкового water counter).
-6. OLED `COLD_FLUSH`: countdown «Cold flush N s» (`N=ceil(remainingMs/1000)`).
-7. OLED steam + `STEAM_COOL`: Tt / heater% / `open`|`close`.
-8. Синхронізувати `docs/main-brew-logic.md` і quickstart після коду.
+1. Замінити єдиний `STEAM_TARGET_C` на `STEAM_READY_TARGET_C=120` + `STEAM_FLOW_TARGET_C=128` (якщо ще не зроблено); `HS0` / auto-`HS1` на 120; у `STEAM_FLOW` — `activeTargetC=128`; після `SS0` — знову 120.
+2. Додати/підтвердити `PUMP_MIN_PCT=50` / `PUMP_MAX_PCT=100`; мапінг A0 (як A1 → `TARGET_MIN/MAX`).
+3. Підтвердити `TARGET_MIN_C=85` / `TARGET_MAX_C=105`. **Не змінювати** стендові `HEATER_KP_*` / `HEATER_KI_*` / `HEATER_FF_*`.
+4. **OLED heat/ready (FR-034)**: у `ESPRESSO_HEAT` / `ESPRESSO_READY` рендерити 4 рядки з 5 значеннями (`Pump_current`+`Pump_target` разом); refresh @ `BREW_DISPLAY_INTERVAL_MS`.
+5. **OLED `BREW_2` (FR-008)**: labels `T_current`/`T_target`/`Heat_power`/`Pump_current` (short aliases); без `Pump_target`.
+6. **OLED steam + cool (FR-029)**: `T_current` / `Heat_power` / `Valve open|close` (short `T_now`/`Heat`/`V open|close`).
+7. **OLED `COLD_FLUSH`**: countdown «Cold flush N s» (без змін семантики).
+8. Прибрати сирі `Tt=`/`S=`/`H=`/`Pp=` і голі `open`/`close` з відповідних render-шляхів.
+9. Синхронізувати `docs/main-brew-logic.md` і quickstart після коду.
 
 ## Project Structure
 
@@ -104,7 +111,7 @@ scripts/
 docs/
 ├── button-panel-protocol.md        # UART-контракт (вже є; LED LT1 без змін)
 ├── thermoblock-pi-heater.md        # референс ПІ/захисту
-└── main-brew-logic.md              # опис нової прошивки (синхронізувати з 2026-11-15)
+└── main-brew-logic.md              # опис нової прошивки (синхронізувати з FR-034/labels)
 
 specs/001-main-brew-logic/          # plan / research / model / contracts / quickstart
 ```

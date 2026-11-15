@@ -2,7 +2,7 @@
 
 Стани та обов’язкові дії (актуатори + кадри панелі). Числа — через константи з [tunable-constants.md](./tunable-constants.md).
 
-Оновлено після clarify 2026-11-15: dual steam targets (120 / 128), pot ranges, OLED layouts; session 4 exit/cold flush без змін.
+Оновлено після clarify 2026-11-15: dual steam targets (120 / 128), pot ranges, OLED layouts; HE1/HE0 FR-034 + shared OLED labels.
 
 ## States
 
@@ -13,11 +13,15 @@ POWER_ON
 ESPRESSO_HEAT ──ready(Tt ≥ target−READY_BAND_C, READY_HOLD_MS; no upper)──► ESPRESSO_READY (HE0)
    ▲                                                      │
    │ heater PI: heat-up                                   ├─ B1 → COLD_FLUSH (P11)
-   │                                                      ├─ B2 → BREW_2 (P21)
-   │                                                      └─ B3 → enterSteam()
-   │                                                            // Tt < STEAM_READY_TARGET_C → STEAM_HEAT (HS1)
+   │ OLED FR-034 @ BREW_DISPLAY_INTERVAL_MS               ├─ B2 → BREW_2 (P21)
+   │   T_current / T_target / Heat_power /                └─ B3 → enterSteam()
+   │   (Pump_current + Pump_target)                             // Tt < STEAM_READY_TARGET_C → STEAM_HEAT (HS1)
    │                                                            // Tt ≥ STEAM_READY_TARGET_C → STEAM_READY (HS0)
    │
+ESPRESSO_READY
+   OLED: same FR-034 as ESPRESSO_HEAT (incl. after P10 / P20 / LT0)
+   // Pump_current typically 0; Pump_target = pot A0
+
 COLD_FLUSH
    pump: COLD_FLUSH_PCT for COLD_FLUSH_MS (or until B1)
    heater: FORCED OFF
@@ -31,7 +35,7 @@ BREW_2
    phases: PREINFUSE → PAUSE → FLOW
    heater PI: PREINFUSE/PAUSE → base; FLOW → brew-flow (+ FF)
    pump FLOW: pot A0 mapped to PUMP_MIN_PCT…PUMP_MAX_PCT
-   OLED: Tt / setpoint / heater% / pump%   // FR-008
+   OLED: T_current / T_target / Heat_power / Pump_current   // FR-008; no Pump_target
    stop: B2 → P20 → ESPRESSO_READY
    ignore: B1, B3
 
@@ -42,7 +46,7 @@ STEAM_HEAT (HS1)
    ├─ B1 or B2 → coolOrReady()                 // ONLY exit to LT1
    └─ B3 → ignore
    heater PI: heat-up
-   OLED: Tt / heater% / open|close            // FR-029
+   OLED: T_current / Heat_power / Valve open|close   // FR-029
 
 STEAM_READY (HS0)
    ├─ maintain STEAM_READY_TARGET_C (120)
@@ -52,7 +56,7 @@ STEAM_READY (HS0)
    └─ B3 → ignore
    // NO idle auto-exit (STEAM_IDLE_EXIT_MS=0)
    heater PI: base
-   OLED: Tt / heater% / open|close
+   OLED: T_current / Heat_power / Valve open|close
 
 STEAM_FLOW
    pulse pump STEAM_PULSE_ON_MS / OFF @ STEAM_PULSE_PCT
@@ -62,7 +66,7 @@ STEAM_FLOW
    handle close → SS0, pump 0, target = STEAM_READY_TARGET_C (120) → STEAM_READY
    B1 or B2 → coolOrReady()
    B3 → ignore
-   OLED: Tt / heater% / open|close
+   OLED: T_current / Heat_power / Valve open|close
 
 STEAM_COOL (LT1)
    target orient = espresso pot (for ready criterion)
@@ -72,7 +76,7 @@ STEAM_COOL (LT1)
    ready criterion → pump 0 (even if handle open) → LT0 → ESPRESSO_READY
    ignore B1/B2
    B3 → enterSteam()
-   OLED: Tt / heater%(=0) / open|close         // FR-029 extends to cool
+   OLED: T_current / Heat_power(=0) / Valve open|close   // FR-029 extends to cool
    panel LT1 = protocol LED3 double-blink
 
 FAULT
@@ -156,9 +160,12 @@ Idle-автовихід: **вимкнено** (`STEAM_IDLE_EXIT_MS=0`).
 
 ## OLED authority
 
-| Context | Content |
+| Context | Content (labels: full \| short) |
 | --- | --- |
-| `BREW_2` | Tt, setpoint, heater%, pump% |
+| `ESPRESSO_HEAT` / `ESPRESSO_READY` | FR-034: `T_current`\|`T_now`, `T_target`\|`T_tar`, `Heat_power`\|`Heat`, (`Pump_current`\|`P_now` + `Pump_target`\|`P_tar`); 4 rows; @ `BREW_DISPLAY_INTERVAL_MS` |
+| `BREW_2` | FR-008: `T_current`\|`T_now`, `T_target`\|`T_tar`, `Heat_power`\|`Heat`, `Pump_current`\|`P_now` (no `Pump_target`) |
 | `COLD_FLUSH` | `Cold flush N s` (countdown) |
-| `STEAM_HEAT` / `STEAM_READY` / `STEAM_FLOW` / `STEAM_COOL` | Tt, heater%, `open`\|`close` |
+| `STEAM_HEAT` / `STEAM_READY` / `STEAM_FLOW` / `STEAM_COOL` | FR-029: `T_current`\|`T_now`, `Heat_power`\|`Heat`, `Valve open`\|`Valve close` (short `V open`\|`V close`); cool Heat=0 |
 | `FAULT` | fault |
+
+Заборонені сирі `Tt`/`S`/`H`/`Pp`/`Ps` і голі `open`/`close` на espresso/steam екранах.

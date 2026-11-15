@@ -59,7 +59,7 @@
 - Подача: `SS1` / імпульси; закриття → `SS0`, помпа 0, ціль знову **120** → `STEAM_READY`.
 - **`STEAM_IDLE_EXIT_MS=0`**; **`B3` у `HS*`/`SS*` ignore**; **`B1`/`B2` → `LT1`**; `B3`@`STEAM_COOL` → `enterSteam()`.
 - **`STEAM_COOL`**: ТЕН OFF; відкрита ручка → імпульси; ready → помпа 0 → `LT0`.
-- OLED пару/`STEAM_COOL`: Tt / ТЕН% / `open`|`close` (FR-029).
+- OLED пару/`STEAM_COOL`: `T_current` / `Heat_power` / `Valve open`|`Valve close` (FR-029; shared labels).
 - `FAULT` → ТЕН OFF, помпа 0; вихід v1 лише power cycle.
 
 **Rationale**: FR-009…015, FR-021/022/024–029, FR-032, SC-005…011/013/015.
@@ -90,16 +90,23 @@
 
 ## 8. Дисплей (OLED layouts) і флоуметр
 
-**Decision** (оновлено 2026-11-15):
-- **Idle / `ESPRESSO_READY` / heat**: як `006` — Tt, ТЕН%, уставка (допустимо).
-- **`BREW_2`**: Tt / уставка / ТЕН% / помпа% (FR-008). Лічильник води на OLED **не** обов’язковий.
-- **`COLD_FLUSH`**: зворотний відлік «Cold flush N s» (`N = ceil(remainingMs/1000)`); UA «Холодний пролив N сек» лише якщо є кириличний шрифт (FR-033).
-- **Пар + `STEAM_COOL`**: Tt / ТЕН% / `open`|`close` (FR-029).
+**Decision** (оновлено 2026-11-15, HE1/HE0 + shared labels):
+- **`ESPRESSO_HEAT` / `ESPRESSO_READY` (`HE1`/`HE0`)**: FR-034 — `T_current`, `T_target`, `Heat_power`, `Pump_current` (команда), `Pump_target` (pot). Layout 128×32: **4 рядки**, помпи на одному. Refresh @ `BREW_DISPLAY_INTERVAL_MS`.
+- **`BREW_2`**: FR-008 — ті самі labels для спільних полів (`T_current`/`T_target`/`Heat_power`/`Pump_current`); **без** `Pump_target`. Лічильник води на OLED **не** обов’язковий.
+- **`COLD_FLUSH`**: зворотний відлік «Cold flush N s» (`N = ceil(remainingMs/1000)`); UA лише якщо є кириличний шрифт (FR-033).
+- **Пар + `STEAM_COOL`**: FR-029 — `T_current` / `Heat_power` / `Valve open`|`Valve close` (short: `T_now` / `Heat` / `V open`|`V close`).
+- **Спільний словник**: повний `T_current`/`T_target`/`Heat_power`/`Pump_current`/`Pump_target` (+ short `T_now`/`T_tar`/`Heat`/`P_now`/`P_tar`). Заборонені сирі `Tt`/`S`/`H`/`Pp`/`Ps` і голі `open`/`close`.
 - Flowmeter імпульси можуть лишатись у внутрішній логіці/USB-лозі; `FLOW_PULSES_PER_ML` — опційно для майбутнього.
 
-**Rationale**: Clarify 2026-11-15; SSD1306 default font = ASCII → EN для cold flush.
+**Rationale**: Clarify 2026-11-15 (два раунди): heat/ready telemetry + readable labels на brew/steam; SSD1306 ASCII → EN cold flush і ASCII labels; 5 полів на 4 рядках через об’єднання помп.
 
-**Alternatives considered**: Залишити water counter у brew-layout — відхилено (користувач задав 4 поля); той самий brew-layout для cold flush — відхилено (обрано countdown).
+**Alternatives considered**:
+- Idle як `006` (Tt/H%/set без pump pot) — **superseded** FR-034.
+- `Pump_target` також у `BREW_2` — відхилено (Option B).
+- 5 окремих рядків / alternating screens — відхилено (обрано 4 рядки, помпи разом).
+- Залишити water counter у brew-layout — відхилено.
+- Той самий brew-layout для cold flush — відхилено (countdown).
+- Залишити `Tt`/`S`/`H`/`Pp` / голі `open`/`close` — відхилено (нечитабельність).
 
 ## 9. Іменовані константи (вимога замовника)
 
