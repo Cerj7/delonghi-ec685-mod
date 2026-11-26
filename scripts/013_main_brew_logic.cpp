@@ -83,7 +83,7 @@ const float TARGET_MAX_C = 105.0f;      // Верхній край потенц�
 const float TARGET_OFF_BAND_C = 1.0f;   // Біля мінімуму = нагрів OFF (не тримати 20 °C)
 // Dual steam targets (FR-032): ready/HS0 = 120; flow/handle-open = 128.
 const float STEAM_READY_TARGET_C = 120.0f;  // Нагрів / HS0 / auto-HS1 (ручка закрита)
-const float STEAM_FLOW_TARGET_C = 128.0f;   // Підтримка під час STEAM_FLOW (ручка відкрита)
+const float STEAM_FLOW_TARGET_C = 132.0f;   // Підтримка під час STEAM_FLOW (ручка відкрита)
 // Legacy alias = ready target; не використовувати як ціль у STEAM_FLOW (T080).
 const float STEAM_TARGET_C = STEAM_READY_TARGET_C;
 // FR-011: HS0 = Tt ≥ STEAM_READY_TARGET_C (без верхньої смуги). STEAM_READY_BAND_C не
