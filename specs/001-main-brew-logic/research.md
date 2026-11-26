@@ -26,13 +26,17 @@
 
 **Alternatives considered**: Миттєве «перетнуло уставку» — відхилено (шум MAX6675 0.25 °C, хибні готовності).
 
-## 4. Захисний cutoff і пар 120 °C
+## 4. Захисний cutoff, діапазони pot і дві цілі пару
 
-**Decision**: Підняти `SAFETY_CUTOFF_C` вище парової цілі (наприклад 130 °C) окремою константою; еспресо-уставка лишається з потенціометра (шкала як у `006`: 20…100 °C). Парова ціль — `STEAM_TARGET_C = 120`.
+**Decision** (оновлено 2026-11-15):
+- Еспресо-уставка з потенціометра A1: `TARGET_MIN_C`…`TARGET_MAX_C` = **85…105 °C**.
+- Потужність помпи з A0: `PUMP_MIN_PCT`…`PUMP_MAX_PCT` = **50…100 %**.
+- Пар — **дві** константи: `STEAM_READY_TARGET_C = 120` (нагрів/`HS0`, ручка закрита); `STEAM_FLOW_TARGET_C = 128` (ручка відкрита). Єдиний `STEAM_TARGET_C` deprecated як «обидві ролі».
+- `SAFETY_CUTOFF_C` строго вище 128 °C (у прошивці стенд: 145 °C).
 
-**Rationale**: У `006` cutoff 105 °C блокував би пар. Spec вимагає утримання ~120 °C і захист від небезпечного перегріву.
+**Rationale**: Clarify 2026-11-15 / FR-030…032 / FR-018. У `006` cutoff ~105 °C блокував би пар на 128 °C.
 
-**Alternatives considered**: Два різні cutoff залежно від режиму — можливо пізніше; для v1 достатньо одного підвищеного ліміту з коментарем.
+**Alternatives considered**: Одна парова ціль 120 або 130 — відхилено (користувач: 120 готовність, 128 під час подачі); два різні cutoff за режимом — YAGNI для v1.
 
 ## 5. Пролив: холодний пролив (`B1`) + еспресо (`B2`)
 
@@ -47,35 +51,32 @@
 
 ## 6. Пар: ручка, імпульси, вихід у `LT1`
 
-**Decision** (session 2–3 + **session 4**, 2026-11-12 — supersedes idle→`LT1` і `B3`-cancel):
-- Готовність пару: **`Tt ≥ STEAM_TARGET_C`** (120 °C). Без `READY_HOLD_MS`, без симетричної смуги 118…122; Tt > 122 °C — валідне `HS0`.
-- Після `HS0` машина тримає ціль `STEAM_TARGET_C`, **доки** не надійде `B1` або `B2` → `LT1` / `coolOrReady()`.
-- Падіння `Tt < STEAM_TARGET_C` у **`STEAM_READY` (ручка закрита)** → авто `HS1`; після знову `≥ target` → `HS0`; якщо ручка вже відкрита на `HS0` — одразу `SS1`.
-- Падіння `Tt < STEAM_TARGET_C` у **`STEAM_FLOW`** → залишитись у flow: імпульси без паузи, **без** `HS1`/`SS0`; ТЕН — steam-flow.
-- Подача від ручки: `SS1` / імпульси `110`/`880` @ 100 %; закриття → `SS0`, помпа 0 → **назад у `STEAM_READY`** (не миттєвий cool).
-- **`STEAM_IDLE_EXIT_MS=0`**: idle-автовихід **вимкнено** назавжди для цієї фічі (session 4 option B).
-- **`B3` у `HS1`/`HS0`/`SS*` ігнорується** (не cancel). `B3` у `STEAM_COOL` → `enterSteam()`.
-- **`B1`/`B2` у `HS1`/`HS0`/`SS1`/`SS0`** → єдиний вихід у `LT1`.
-- Індикація `LT1`: чинний протокол (LED3 double-blink); LED1+LED2 **не** вимагаємо (панель без змін).
-- **`STEAM_COOL` (FR-028)**: ТЕН OFF; відкрита ручка → ті самі імпульси; ready criterion еспресо → помпа 0 навіть якщо ручка відкрита → `LT0`.
-- OLED: `OPEN` при відкритій ручці; мітки `HS`/`rdy`/`cool`.
+**Decision** (session 2–4 + **2026-11-15 dual targets**):
+- Готовність пару: **`Tt ≥ STEAM_READY_TARGET_C` (120 °C)**. Без `READY_HOLD_MS`, без смуги 118…122.
+- Після `HS0` з **закритою** ручкою тримати **120 °C**, **доки** `B1`/`B2` → `LT1`.
+- Падіння `Tt < 120` у **`STEAM_READY` (ручка закрита)** → авто `HS1`→`HS0`; якщо ручка вже відкрита на `HS0` — одразу `SS1` з ціллю **128 °C**.
+- У **`STEAM_FLOW`**: `activeTargetC = STEAM_FLOW_TARGET_C` (**128 °C**); падіння Tt → лишитись у flow (імпульси без паузи, без `HS1`/`SS0`); ТЕН — steam-flow до 128.
+- Подача: `SS1` / імпульси; закриття → `SS0`, помпа 0, ціль знову **120** → `STEAM_READY`.
+- **`STEAM_IDLE_EXIT_MS=0`**; **`B3` у `HS*`/`SS*` ignore**; **`B1`/`B2` → `LT1`**; `B3`@`STEAM_COOL` → `enterSteam()`.
+- **`STEAM_COOL`**: ТЕН OFF; відкрита ручка → імпульси; ready → помпа 0 → `LT0`.
+- OLED пару/`STEAM_COOL`: `T_current` / `Heat_power` / `Valve open`|`Valve close` (FR-029; shared labels).
 - `FAULT` → ТЕН OFF, помпа 0; вихід v1 лише power cycle.
 
-**Rationale**: FR-009…015, FR-021/022/024–028, SC-005…011; користувач: вихід з пару лише кнопками еспресо; активне охолодження ручкою.
+**Rationale**: FR-009…015, FR-021/022/024–029, FR-032, SC-005…011/013/015.
 
-**Alternatives considered**: `B3`-cancel / idle→`LT1` — **відхилено session 4**; LED1+LED2 для `LT1` — відхилено (немає можливості міняти панель зараз); пауза помпи в `STEAM_FLOW` при холодному Tt — відхилено session 3; ПІ до уставки в cool — відхилено (обрано ТЕН OFF).
+**Alternatives considered**: Одна ціль на весь пар — відхилено 2026-11-15; `B3`-cancel / idle→`LT1` — відхилено session 4; пауза помпи при холодному Tt у flow — відхилено session 3.
 
 ## 6b. ПІ-профілі: heat-up + brew/steam flow
 
-**Decision** (session 3 option C + **session 4** heat-up):
-- **Чотири** tunable профілі: **heat-up** (`HEATER_KP_HEAT`/`HEATER_KI_HEAT`, > base) у `ESPRESSO_HEAT` / `STEAM_HEAT`; **base** (5.0/0.05) idle/ready/preinfuse/pause; **brew-flow** (4× + FF) лише `FLOW` у `BREW_2`; **steam-flow** (2.5× + FF) увесь `STEAM_FLOW`.
-- Cold flush і `STEAM_COOL` — ТЕН примусово OFF (профіль не застосовується).
-- Цілі без offset; критерії `HE0`/`HS0` **без змін**; короткочасний overshoot ~+3…5 °C OK (нижче `SAFETY_CUTOFF_C`); heat-up Kp/Ki — стендовий тюнінг.
-- Стенд session 3: 3×/2× без FF мало → C (4×/2.5× + FF) для flow.
+**Decision** (session 3–4 + **2026-11-15**):
+- **Чотири** tunable профілі: heat-up / base / brew-flow / steam-flow (+ FF під час flow).
+- Cold flush і `STEAM_COOL` — ТЕН OFF.
+- Цілі без offset; `HE0`/`HS0` без змін; overshoot ~+3…5 °C OK (нижче cutoff).
+- **Source of truth числових Kp/Ki/FF** = поточна секція Tunables у `scripts/013_main_brew_logic.cpp` (стенд). У ітерації 2026-11-15 **не відкочувати** до застарілих табличних 4×/2.5×.
 
-**Rationale**: FR-027 / SC-010/012; швидший розігрів без послаблення готовності; користувач допустив невеликий overshoot.
+**Rationale**: FR-027 / SC-010/012; користувач: «коефіцієнти не виправляй, спробуємо на них».
 
-**Alternatives considered**: Лише підняти base Kp — відхилено; послабити `HE0` до `Tt ≥ target` — відхилено; target-offset — відхилено; зміна панелі під нову індикацію — відхилено.
+**Alternatives considered**: Повернути документи до 4×/2.5× як обов’язкові дефолти — **відхилено** (стенд важливіший).
 
 ## 7. Декальцинація (EEPROM, uptime)
 
@@ -87,13 +88,25 @@
 - Wall-clock календар / RTC / Serial `TIME` — відхилено для v1 (зайве залізо; out of scope).
 - Лічильник порцій — відхилено.
 
-## 8. Дисплей і флоуметр
+## 8. Дисплей (OLED layouts) і флоуметр
 
-**Decision**: Поза проливом — як `006` (Tt, потужність ТЕНу %, уставка). Під час проливу — пріоритет: імпульси/об’єм флоуметра, Tt, потужність помпи %. Одиниця: імпульси, якщо калібрування мл ще немає (`FLOW_PULSES_PER_ML` константа; якщо 0 — показувати імпульси).
+**Decision** (оновлено 2026-11-15, HE1/HE0 + shared labels):
+- **`ESPRESSO_HEAT` / `ESPRESSO_READY` (`HE1`/`HE0`)**: FR-034 — `T_current`, `T_target`, `Heat_power`, `Pump_current` (команда), `Pump_target` (pot). Layout 128×32: **4 рядки**, помпи на одному. Refresh @ `BREW_DISPLAY_INTERVAL_MS`.
+- **`BREW_2`**: FR-008 — ті самі labels для спільних полів (`T_current`/`T_target`/`Heat_power`/`Pump_current`); **без** `Pump_target`. Лічильник води на OLED **не** обов’язковий.
+- **`COLD_FLUSH`**: зворотний відлік «Cold flush N s» (`N = ceil(remainingMs/1000)`); UA лише якщо є кириличний шрифт (FR-033).
+- **Пар + `STEAM_COOL`**: FR-029 — `T_current` / `Heat_power` / `Valve open`|`Valve close` (short: `T_now` / `Heat` / `V open`|`V close`).
+- **Спільний словник**: повний `T_current`/`T_target`/`Heat_power`/`Pump_current`/`Pump_target` (+ short `T_now`/`T_tar`/`Heat`/`P_now`/`P_tar`). Заборонені сирі `Tt`/`S`/`H`/`Pp`/`Ps` і голі `open`/`close`.
+- Flowmeter імпульси можуть лишатись у внутрішній логіці/USB-лозі; `FLOW_PULSES_PER_ML` — опційно для майбутнього.
 
-**Rationale**: FR-008, assumptions у spec.
+**Rationale**: Clarify 2026-11-15 (два раунди): heat/ready telemetry + readable labels на brew/steam; SSD1306 ASCII → EN cold flush і ASCII labels; 5 полів на 4 рядках через об’єднання помп.
 
-**Alternatives considered**: Завжди мл — потребує калібрування, якого може не бути.
+**Alternatives considered**:
+- Idle як `006` (Tt/H%/set без pump pot) — **superseded** FR-034.
+- `Pump_target` також у `BREW_2` — відхилено (Option B).
+- 5 окремих рядків / alternating screens — відхилено (обрано 4 рядки, помпи разом).
+- Залишити water counter у brew-layout — відхилено.
+- Той самий brew-layout для cold flush — відхилено (countdown).
+- Залишити `Tt`/`S`/`H`/`Pp` / голі `open`/`close` — відхилено (нечитабельність).
 
 ## 9. Іменовані константи (вимога замовника)
 
