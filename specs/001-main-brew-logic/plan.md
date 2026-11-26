@@ -1,6 +1,6 @@
 # Implementation Plan: Main Brew Logic (EC685)
 
-**Branch**: `001-main-brew-logic` | **Date**: 2026-11-11 (plan refresh after clarify session 3) | **Spec**: [spec.md](./spec.md)
+**Branch**: `001-main-brew-logic` (артефакти; робоча git-гілка може відрізнятись) | **Date**: 2026-11-15 (plan refresh: HE1/HE0 OLED + shared labels) | **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/001-main-brew-logic/spec.md`
 
@@ -8,18 +8,28 @@
 
 ## Summary
 
-Нова прошивка основної Arduino Nano, що відтворює штатну поведінку EC685: розігрів еспресо → готовність → пролив 1/2 з преінфузією → пар → охолодження → нагадування декальцинації раз на 28 діб. Технічний підхід: об’єднати ПІ-нагрів і диммер з `006_thermoblock_pi_heater.cpp`, UART-контракт панелі з `docs/button-panel-protocol.md` / `012_main_panel_link.cpp`, плюс FSM режимів, флоуметр, ручку пари та EEPROM-таймер `DC1`/`DC0`. Усі значущі числові параметри виносяться в Tunables на початку скетчу.
+Нова прошивка основної Arduino Nano, що відтворює штатну поведінку EC685: розігрів еспресо → готовність → **холодний пролив (`B1`)** / **еспресо з преінфузією (`B2`)** → пар → охолодження (`LT1`, опційно з імпульсною помпою від ручки) → нагадування декальцинації раз на 28 діб. Технічний підхід: об’єднати ПІ-нагрів і диммер з `006_thermoblock_pi_heater.cpp`, UART-контракт панелі з `docs/button-panel-protocol.md` / `012_main_panel_link.cpp`, плюс FSM режимів, флоуметр, ручку пари та EEPROM-таймер `DC1`/`DC0`. Усі значущі числові параметри виносяться в Tunables на початку скетчу. **Прошивка панелі `011` не змінюється.**
 
-**Пар (clarify 2026-11-11 session 2)**:
-- Готовність: `Tt ≥ STEAM_TARGET_C` (без ±2 / 118…122); overshoot OK.
-- Після `HS0` утримувати ціль 120 °C; у `STEAM_READY` з закритою ручкою падіння → авто `HS1`→`HS0`; з уже відкритою ручкою після `HS0` — авто `SS1`.
-- Закриття ручки: `SS0` → назад у `HS0` (не миттєвий `coolOrReady`).
-- Idle `STEAM_IDLE_EXIT_MS=3000` (закрита ручка, без кнопок) → `LT1`, ціль пару знімається.
-- `B3` під час `STEAM_COOL` → `enterSteam()` (`HS0`/`HS1`).
+**Пар (sessions 2–4, оновлено 2026-11-15)**:
+- Дві цілі: `STEAM_READY_TARGET_C = 120` (нагрів / `HS0`, ручка закрита); `STEAM_FLOW_TARGET_C = 128` (ручка відкрита / `STEAM_FLOW`).
+- Готовність `HS0`: `Tt ≥ STEAM_READY_TARGET_C` (без hold / без верхньої смуги).
+- У `STEAM_READY` (ручка закрита): падіння нижче 120 → авто `HS1`→`HS0`; відкриття ручки → `SS1` + ціль 128.
+- У `STEAM_FLOW`: ціль 128; `Tt < 128` (або `< 120`) **не** дає `HS1`/`SS0` і **не** паузить імпульси (FR-026).
+- Закриття ручки: `SS0` → ціль знову 120 → `HS0` (не миттєвий cool).
+- Вихід з пару: лише `B1`/`B2` → `LT1`; idle-автовихід вимкнено; `B3` у `HS*`/`SS*` ігнорується; `B3`@`STEAM_COOL` → `enterSteam()`.
 
-**Пар + нагрів (clarify 2026-11-11 session 3 — delta)**:
-- У `STEAM_FLOW` (`SS1`, ручка відкрита): `Tt < STEAM_TARGET_C` **не** дає `HS1`/`SS0` і **не** паузить імпульсну помпу; лишаємось у flow, ТЕН гріє далі (FR-026).
-- Три ПІ-профілі (FR-027 / SC-010, stand → option **C**): **base** · **brew-flow** 4× (`HEATER_KP_BREW`/`HEATER_KI_BREW` + `HEATER_FF_BREW_PCT`, лише `FLOW`) · **steam-flow** 2.5× (`HEATER_KP_STEAM`/`HEATER_KI_STEAM` + `HEATER_FF_STEAM_PCT`, увесь `STEAM_FLOW`). Без target-offset. Brew > steam > base. (3×/2× без FF — відхилено стендом.)
+**Clarify 2026-11-15 — delta (pot / steam / OLED layouts)**:
+1. **Не відкочувати** стендові ПІ Kp/Ki/FF у `013` (source of truth = Tunables у прошивці).
+2. **Діапазони pot**: температура `TARGET_MIN_C`…`TARGET_MAX_C` = **85…105 °C**; помпа `PUMP_MIN_PCT`…`PUMP_MAX_PCT` = **50…100 %**.
+3. **OLED `BREW_2`**: `T_current` / `T_target` / `Heat_power` / `Pump_current` (FR-008) — без `Pump_target`, без обов’язкового лічильника води.
+4. **OLED cold flush**: зворотний відлік «Cold flush N s» (EN fallback; UA якщо шрифт дозволяє) (FR-033).
+5. **OLED пар + `STEAM_COOL`**: `T_current` / `Heat_power` / `Valve open`|`Valve close` (FR-029).
+
+**Clarify 2026-11-15 — delta (HE1/HE0 telemetry + shared labels)**:
+6. **OLED `ESPRESSO_HEAT` / `ESPRESSO_READY` (`HE1`/`HE0`)**: п’ять значень — `T_current`, `T_target`, `Heat_power`, `Pump_current` (команда; зазвичай 0), `Pump_target` (pot) (FR-034 / SC-017).
+7. **Layout 128×32**: 4 рядки — `T_current` → `T_target` → `Heat_power` → (`Pump_current` + `Pump_target` на одному рядку).
+8. **Спільний словник labels** (повний / short): `T_current`|`T_now`, `T_target`|`T_tar`, `Heat_power`|`Heat`, `Pump_current`|`P_now`, `Pump_target`|`P_tar`; пар: `Valve open`|`close` / `V open`|`V close`. Заборонені сирі `Tt`/`S`/`H`/`Pp`/`Ps` і голі `open`/`close`.
+9. Інтервал оновлення heat/ready/brew/flush: `BREW_DISPLAY_INTERVAL_MS` (0.5 с) де вимагає FR.
 
 ## Technical Context
 
@@ -35,11 +45,11 @@
 
 **Project Type**: Embedded firmware (single sketch + docs)
 
-**Performance Goals**: Відповідь на кнопку ≤300 мс; OLED/лічильник під час проливу ≥2 Гц; еспресо-готовність ±1 °C / ≥1.0 с; пар-готовність `Tt ≥ STEAM_TARGET_C` миттєво; idle пару 10000 мс → `LT1`; таймінги преінфузії/паузи/імпульсів ±200 мс; перемикання ПІ-профілю ≤ одного `CONTROL_INTERVAL_MS`
+**Performance Goals**: Відповідь на кнопку ≤300 мс; OLED heat/ready/brew/flush/steam ≥2 Гц (`BREW_DISPLAY_INTERVAL_MS` / `OLED_INTERVAL_MS`); `HE0`: `Tt ≥ target − 1 °C` / ≥1.0 с (без верхньої межі); `LT0`: `Tt ≤ target + 1 °C` / ≥1.0 с; пар-готовність `Tt ≥ STEAM_READY_TARGET_C` миттєво; таймінги cold flush / преінфузії / імпульсів ±200 мс; перемикання ПІ-профілю ≤ одного `CONTROL_INTERVAL_MS`
 
-**Constraints**: Flash/RAM Nano; SoftwareSerial 19200 на D8/D9 (короткі кадри); захисний cutoff ТЕНу ≥ роботи на 120 °C; помпа 0 % поза проливом/паровою подачею; watchdog ~2 с; агресивніші Kp/Ki під час flow не знімають `SAFETY_CUTOFF_C`
+**Constraints**: Flash/RAM Nano; SoftwareSerial 19200 на D8/D9; `SAFETY_CUTOFF_C` строго вище `STEAM_FLOW_TARGET_C` (128 °C) і heat-up overshoot; помпа 0 % поза cold flush / brew-2 / паровими імпульсами (включно з `STEAM_COOL`+ручка); watchdog ~2 с; панель `011` без змін; SSD1306 default font → cold-flush текст EN («Cold flush N s») і ASCII OLED labels; 128×32 → heat/ready = 4 рядки (помпи спільно)
 
-**Scale/Scope**: 1 нова прошивка основної плати + docs; панель `011` без змін контракту (лише споживач); ~1 FSM з 9 станами; 3 ПІ-профілі нагріву
+**Scale/Scope**: 1 нова прошивка основної плати + docs; панель `011` без змін контракту; ~1 FSM з 9 станами; **4** ПІ-профілі; **2** парові температурні константи; **3** espresso/steam OLED layouts + cold-flush countdown
 
 ## Constitution Check
 
@@ -49,22 +59,28 @@
 
 | Gate | Status | Notes |
 | --- | --- | --- |
-| I. Hardware Safety | PASS | Невалідна термопара / `SAFETY_CUTOFF_C` → ТЕН OFF, помпа 0, `FAULT` до power cycle; агресивні профілі не обходять cutoff |
-| II. Memory Efficiency | PASS | Немає `malloc`/`new` у loop; EEPROM буфер фіксованого розміру; статичні буфери UART |
+| I. Hardware Safety | PASS | Невалідна термопара / `SAFETY_CUTOFF_C` (>128 °C) → ТЕН OFF, помпа 0, `FAULT` до power cycle; cold flush і `STEAM_COOL` — ТЕН OFF |
+| II. Memory Efficiency | PASS | Немає `malloc`/`new` у loop; EEPROM буфер фіксованого розміру; статичні буфери UART / OLED рядків (`F()`-рядки для labels) |
 | III. Deterministic Real-Time | PASS | FSM + `millis()`; без блокуючих `delay()` у керуванні; ISR лише короткий лічильник імпульсів |
 | IV. Maintainable & Modular | EXCEPTION | Монолітний `013` зі секціями (як `006`/`012`); див. Complexity Tracking |
-| Контракт панелі / Tunables / YAGNI DC UI | PASS | Коди з protocol; усі °C/мс/%/Kp/Ki у Tunables; UI декальцинації out of scope |
+| Контракт панелі / Tunables / YAGNI DC UI | PASS | Коди з protocol без зміни `011`; усі °C/мс/%/Kp/Ki у Tunables; UI декальцинації out of scope |
 
-**Post-design re-check** (2026-11-11 session 3): PASS з задокументованим винятком IV. Session 3 delta не змінює gates: continuous steam pulse лишає cutoff; три профілі — лише Tunables + вибір Kp/Ki у PI step.
+**Post-design re-check** (2026-11-15, HE1/HE0 + labels): PASS з задокументованим винятком IV. Dual steam / pot ranges / FR-034 / shared OLED labels — лише Tunables + display path + `activeTargetC` / `potPumpPercent` на екрані; cutoff лишається вище 128 °C; панель без змін; Flash impact = довші `F()`-рядки labels (прийнятно).
 
-### Implementation delta (після plan refresh)
+### Implementation delta (після plan refresh 2026-11-15 HE1/HE0)
 
-Код `scripts/013_main_brew_logic.cpp` ще має: (а) паузу помпи/`HS1` при `Tt < target` у `STEAM_FLOW`; (б) один набір `HEATER_KP`/`HEATER_KI`. Після цього plan — оновити Tunables + FSM за [contracts/main-fsm.md](./contracts/main-fsm.md) / [tunable-constants.md](./contracts/tunable-constants.md), `docs/main-brew-logic.md`, потім `/speckit-tasks` (delta) або прямий implement.
+Код `scripts/013_main_brew_logic.cpp` частково вже має brew/steam OLED і pot ranges; ще потрібні зміни під FR-034 і словник labels. Після цього plan — `/speckit-tasks` (delta) або implement.
 
 Ключові code deltas:
-1. `STEAM_FLOW`: прибрати гілку `Tt < STEAM_TARGET_C` → `SS0`/`STEAM_HEAT`; гріти steam-flow профілем, імпульси не чіпати.
-2. Tunables: brew 4× + FF, steam 2.5× + FF; у `updateHeaterPi` вибирати профіль і додавати FF лише у brew-`FLOW` / `STEAM_FLOW`.
-3. Авто-`HS1` лише з `STEAM_READY` (ручка закрита).
+1. Замінити єдиний `STEAM_TARGET_C` на `STEAM_READY_TARGET_C=120` + `STEAM_FLOW_TARGET_C=128` (якщо ще не зроблено); `HS0` / auto-`HS1` на 120; у `STEAM_FLOW` — `activeTargetC=128`; після `SS0` — знову 120.
+2. Додати/підтвердити `PUMP_MIN_PCT=50` / `PUMP_MAX_PCT=100`; мапінг A0 (як A1 → `TARGET_MIN/MAX`).
+3. Підтвердити `TARGET_MIN_C=85` / `TARGET_MAX_C=105`. **Не змінювати** стендові `HEATER_KP_*` / `HEATER_KI_*` / `HEATER_FF_*`.
+4. **OLED heat/ready (FR-034)**: у `ESPRESSO_HEAT` / `ESPRESSO_READY` рендерити 4 рядки з 5 значеннями (`Pump_current`+`Pump_target` разом); refresh @ `BREW_DISPLAY_INTERVAL_MS`.
+5. **OLED `BREW_2` (FR-008)**: labels `T_current`/`T_target`/`Heat_power`/`Pump_current` (short aliases); без `Pump_target`.
+6. **OLED steam + cool (FR-029)**: `T_current` / `Heat_power` / `Valve open|close` (short `T_now`/`Heat`/`V open|close`).
+7. **OLED `COLD_FLUSH`**: countdown «Cold flush N s» (без змін семантики).
+8. Прибрати сирі `Tt=`/`S=`/`H=`/`Pp=` і голі `open`/`close` з відповідних render-шляхів.
+9. Синхронізувати `docs/main-brew-logic.md` і quickstart після коду.
 
 ## Project Structure
 
@@ -80,7 +96,7 @@ specs/001-main-brew-logic/
 │   ├── panel-uart.md
 │   ├── main-fsm.md
 │   └── tunable-constants.md
-└── tasks.md             # Phase 2 (/speckit-tasks) — потрібен delta session 3
+└── tasks.md             # потребує delta після цього plan
 ```
 
 ### Source Code (repository root)
@@ -93,9 +109,9 @@ scripts/
 └── 013_main_brew_logic.cpp         # НОВА робоча прошивка основної плати
 
 docs/
-├── button-panel-protocol.md        # UART-контракт (вже є)
+├── button-panel-protocol.md        # UART-контракт (вже є; LED LT1 без змін)
 ├── thermoblock-pi-heater.md        # референс ПІ/захисту
-└── main-brew-logic.md              # опис нової прошивки (синхронізувати з FR-026/027)
+└── main-brew-logic.md              # опис нової прошивки (синхронізувати з FR-034/labels)
 
 specs/001-main-brew-logic/          # plan / research / model / contracts / quickstart
 ```

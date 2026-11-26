@@ -10,7 +10,6 @@ out/
 *.so
 *.a
 *.elf
-*.hex
 *.exe
 *.dll
 .idea/

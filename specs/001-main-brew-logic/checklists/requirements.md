@@ -36,3 +36,4 @@
 - Post-analyze remediation (2026-11-11): `DC1` = накопичений uptime (не wall-clock); `HS0` без `READY_HOLD_MS`; `SS0` → `coolOrReady()`; `FAULT` до power cycle; конституція v1.0.0.
 - `/speckit-clarify` (2026-11-11, session 2): `B3`@`STEAM_COOL` → знову пар; готовність пару = `Tt ≥ 120` (без верхньої смуги); авто `HS0`↔`HS1` при падінні; після догріву авто-`SS1` якщо ручка відкрита; `STEAM_IDLE_EXIT_MS=3000`; закриття ручки → `HS0` (не миттєвий cool). Checklist 16/16 без змін стану.
 - `/speckit-clarify` (2026-11-11, session 3): під час `STEAM_FLOW` Tt < 120 → без `HS1`/паузи помпи; три ПІ-профілі; brew-flow лише у фазі `FLOW`. Стенд: B (3×/2× без FF) мало → **C** (4×/2.5× + FF). Checklist 16/16 без змін стану.
+- `/speckit-clarify` (2026-11-15, HE1/HE0 OLED + labels): FR-034 (heat/ready telemetry + pot pump); спільний словник labels для FR-008/029/034; checklist 16/16 без змін стану.
