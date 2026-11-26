@@ -4,6 +4,8 @@
 
 Специфікація фічі: [`specs/001-main-brew-logic/`](../specs/001-main-brew-logic/) (`spec.md`, `plan.md`, `contracts/`, `quickstart.md`).
 
+Дельта програми декальцинації: [`specs/002-descaling-program/`](../specs/002-descaling-program/) (секція нижче).
+
 **Clarify 2026-11-15 (Phase 13):** dual steam targets (`STEAM_READY_TARGET_C=120` / `STEAM_FLOW_TARGET_C=128`), діапазони pot (A1 85…105 °C, A0 50…100 %), OLED **field sets** (brew metrics / cold-flush countdown / steam+cool). Session 4 без змін: cold flush, вихід з пару лише `B1`/`B2`, idle/`B3`-cancel вимкнено, `STEAM_COOL`+ручка → імпульси / ТЕН OFF, чотири ПІ-профілі.
 
 **Clarify 2026-11-15 (Phase 14):** OLED `ESPRESSO_HEAT`/`ESPRESSO_READY` (`HE1`/`HE0`) — **FR-034** (5 полів / 4 рядки, у т.ч. `Pump_target`); спільний словник labels для brew/steam (короткі aliases на 128×32). Phase 13 field sets **лишаються**, лише з новими іменами labels. **Стендові ПІ** (`HEATER_KP_*` / `HEATER_KI_*` / `HEATER_FF_*`) у Phase 13/14 **без змін**. Панель `011` **без змін**.
@@ -197,15 +199,138 @@ USB Serial основної: **115200**, кадр = код ≤3 символи +
 
 Тобто коди кадрів ті самі (`B1`/`B2`/`B3`, `HS*`, `SS*`, `LT*`, `P11`/`P10` для flush), але семантика основної: `B3`@пар = ігнор; `SS1` лише від ручки (з ціллю 128); cancel = `B1`/`B2`. Фіксація override: [`contracts/panel-uart.md`](../specs/001-main-brew-logic/contracts/panel-uart.md) § Feature-specific overrides.
 
+> **`002` delta:** коротке «пар» лишається `B3`→steam; **hold-enter** декальцинації потребує press `B3` + release `R3` і **пари** прошивок `011`+`013` (FR-018a). Деталі панелі: [`button-panel-protocol.md`](button-panel-protocol.md) § Hold «пар» / `R3`.
+
+---
+
+## Програма декальцинації (`002`)
+
+Реалізація в `scripts/013_main_brew_logic.cpp` поверх brew/steam FSM з `001`. Спека / контракти / стенд: [`specs/002-descaling-program/`](../specs/002-descaling-program/). Layout EEPROM DecalcTimer **без змін** (лише `magic` / `accumulatedOnSeconds` / `dcLatched`); фаза програми в EEPROM **не** зберігається.
+
+### Hold-enter
+
+| Параметр | Значення (Tunables) | Поведінка |
+| --- | --- | --- |
+| Вхід | утримання «пар» ≥ `DESCALE_HOLD_ENTER_MS` (10 с ± `DESCALE_HOLD_ENTER_TOL_MS`) | з `ESPRESSO_HEAT` / `ESPRESSO_READY` → `DESCALE_PREP`; **незалежно** від `DC1` / `dcLatched` |
+| Підказка | після `DESCALE_HOLD_PROMPT_MS` (1 с) | OLED «Режим декальцинації через N сек»; ТЕН ще за штатним еспресо-ПІ |
+| Short / cancel | `R3` до enter | < prompt → short steam (`001`); prompt…enter → cancel countdown, без пари |
+| Пара прошивок | `011` з `R3` + оновлений `013` | без `R3` hold-enter недоступний (FR-018a) |
+
+Контракт жестів / UART: [`contracts/panel-hold-uart.md`](../specs/002-descaling-program/contracts/panel-hold-uart.md).
+
+### FSM overview
+
+```text
+ESPRESSO_READY/HEAT --[B3]--> DESCALE_HOLD
+DESCALE_HOLD --[hold ≥ enter]--> DESCALE_PREP
+DESCALE_PREP --[B3 + handle open]--> DESCALE_PHASE1
+DESCALE_PHASE1 ⇄ DESCALE_REFILL          // early no-flow, volume kept
+DESCALE_PHASE1 --[vol ≥ target]--> DESCALE_WAIT_RINSE   // DC1 stays
+DESCALE_WAIT_RINSE --[B3 + handle open]--> DESCALE_PHASE2
+DESCALE_PHASE2 ⇄ DESCALE_REFILL_WATER    // early no-flow, volume kept; no DC0
+DESCALE_PHASE2 --[vol ≥ target]--> DC0 + coolOrReady()  // espresso path
+Any DESCALE_* --[FAULT / invalid TC / cutoff]--> FAULT   // no DC0
+```
+
+| Стан | Коротко | ТЕН | Помпа |
+| --- | --- | --- | --- |
+| `DESCALE_HOLD` | Утримання «пар»; countdown після prompt | еспресо-ПІ | 0 % |
+| `DESCALE_PREP` | Залити очисник, відкрити ручку, новий `B3` | 0 % | 0 % |
+| `DESCALE_PHASE1` | Очистка: імпульси + об’єм до `DESCALE_PHASE_VOLUME_ML` | ПІ → **53 °C** | pulse ON @ `DESCALE_PUMP_PCT` |
+| `DESCALE_REFILL` | Долив очисника (`phasePulses` kept) | 0 % | 0 % |
+| `DESCALE_WAIT_RINSE` | Залити чисту воду; `DC1` ще не скидати | 0 % | 0 % |
+| `DESCALE_PHASE2` | Промивання: імпульси; success → `DC0` | 0 % | pulse ON @ `DESCALE_PUMP_PCT` |
+| `DESCALE_REFILL_WATER` | Долив води (`phasePulses` kept; **без** `DC0`) | 0 % | 0 % |
+
+Повна таблиця переходів / кнопок / success exit: [`contracts/descale-fsm.md`](../specs/002-descaling-program/contracts/descale-fsm.md). Сутності сесії: [`data-model.md`](../specs/002-descaling-program/data-model.md).
+
+### Матриця кнопок `DESCALE_*`
+
+| Стан | `B1` / `B2` | `B3` | `R3` |
+| --- | --- | --- | --- |
+| `DESCALE_HOLD` | ігнор | уже held — ігнор | short steam / cancel countdown (за elapsed) |
+| `DESCALE_PREP` | ігнор (не cold flush / не еспресо) | відкрита ручка → `PHASE1`; закрита → stay + HANDLE_CLOSED | ігнор (жест hold знято) |
+| `DESCALE_PHASE1` | ігнор | ігнор | ігнор |
+| `DESCALE_REFILL` | ігнор | відкрита → resume `PHASE1`; закрита → HANDLE_CLOSED | ігнор |
+| `DESCALE_WAIT_RINSE` | ігнор | відкрита → `PHASE2`; закрита → HANDLE_CLOSED | ігнор |
+| `DESCALE_PHASE2` | ігнор | ігнор | ігнор |
+| `DESCALE_REFILL_WATER` | ігнор | відкрита → resume `PHASE2`; закрита → HANDLE_CLOSED | ігнор |
+
+Під час активних фаз закриття ручки **не** є подією FSM: імпульси тривають до volume / no-flow / `FAULT`. Старт і resume (`PREP` / `REFILL` / `WAIT_RINSE` / `REFILL_WATER`) вимагають **нового** фронту `B3` + відкритої ручки (sticky hold з жесту входу помпу не стартує).
+
+### Політика ТЕНа (53 °C лише в `DESCALE_PHASE1`)
+
+Гейти в `013`: `descaleHeaterSetpoint()` / `descaleHeaterForceOff()`.
+
+| Контекст | ТЕН |
+| --- | --- |
+| Hold-countdown (`DESCALE_HOLD`, до `DESCALE_PREP`) | штатний еспресо-ПІ (`001`) |
+| **Лише** `DESCALE_PHASE1` | ПІ → `DESCALE_PHASE1_TEMP_C` = **53 °C** (ON і OFF імпульсів; помпа **без** temp-gate) |
+| `DESCALE_PREP` / `DESCALE_REFILL` / `DESCALE_WAIT_RINSE` / `DESCALE_PHASE2` / `DESCALE_REFILL_WATER` | **0 %** (force-off, без ПІ) |
+| Будь-який `DESCALE_*` (крім hold-countdown) | **не** еспресо- / парова уставка |
+
+Джерело 53 °C: штатний PIC ADC `0x0177` — [`pic16f1938-operating-modes.md`](pic16f1938-operating-modes.md).
+
+### Імпульси / no-flow / refill (симетрія фаз 1 і 2)
+
+Обидві фази крутять помпу через `millis()` (без `delay()`): `pumpMayRun()` true лише в `DESCALE_PHASE1` / `DESCALE_PHASE2` під час pulse ON. Об’єм: `phasePulses / FLOW_PULSES_PER_ML` → ціль `DESCALE_PHASE_VOLUME_ML` (потрібен `FLOW_PULSES_PER_ML > 0`).
+
+| | Фаза 1 (очистка) | Фаза 2 (промивання) |
+| --- | --- | --- |
+| ON / OFF | `DESCALE_PHASE1_ON_MS` / `OFF_MS` (500 / 1000) | `DESCALE_PHASE2_ON_MS` / `OFF_MS` (500 / 500) |
+| No-flow (лише під час ON) | ≥ `DESCALE_PHASE1_NOFLOW_MS` (1000) | ≥ `DESCALE_PHASE2_NOFLOW_MS` (1500) |
+| Early no-flow + vol &lt; target | → `DESCALE_REFILL` (долив очисника) | → `DESCALE_REFILL_WATER` (долив води; **без** `DC0`) |
+| Resume після доливу | `B3` + open → `PHASE1`; `phasePulses` kept; знову 53 °C | `B3` + open → `PHASE2`; `phasePulses` kept; ТЕН лишається 0 % |
+| Vol ≥ target (або no-flow уже при ≥ target) | → `DESCALE_WAIT_RINSE` (**пріоритет** над refill; `DC1` stays) | → success = `DC0` (**пріоритет** над refill) |
+
+No-flow на OFF **не** озброюється (пауза відмочування ≠ «порожній бак»). Свіжий вхід у фазу нулить `phasePulses`; refill resume — ні.
+
+### Успіх = `DC0` (лише кінець фази 2)
+
+`completeDescalePhase2Success()` у `013`:
+
+1. Помпа 0 %; сесія скинута.
+2. Спільний clear як USB-сервіс: `handleServiceDc0()` → `sendToPanel("DC0")` + `dcLatched=false` + `accumulatedOnSeconds=0` + EEPROM save (latency ≪ `DESCALE_DC0_MAX_LATENCY_MS`).
+3. `coolOrReady()` → еспресо heat/ready (**не** парова ціль).
+
+`FAULT` / invalid thermocouple / safety cutoff з будь-якого `DESCALE_*` → ТЕН OFF, помпа 0, `FAULT`, **без** `DC0` / без clear DecalcTimer. USB `DC0`/`DC1` лишаються сервісними шляхами `001`.
+
+### Persistence: без phase EEPROM resume
+
+`DescaleSession` (`phase`, `phasePulses`, pulse ON/OFF, no-flow arm) — **лише RAM**. Power cycle / cold start: програма **не** відновлює фазу; `dcLatched` лишається як був у EEPROM. Resume всередині сесії — лише RAM-шлях refill ⇄ phase (див. вище).
+
+### Tunables
+
+Усі `DESCALE_*` — іменовані константи на початку `013` (поруч з Decalc / Timing). Контракт і дефолти: [`contracts/descale-tunables.md`](../specs/002-descaling-program/contracts/descale-tunables.md). Стенд MAY тимчасово зменшити `DESCALE_PHASE_VOLUME_ML` / hold / pulses **лише** в секції Tunables.
+
+### Гідравлічний шлях (очікування стенду)
+
+На EC685 розведення потоку **механічне** (ручка пари + пружинний клапан групи). Прошивка **не** керує шляхом рідини і **не** заявляє керування соленоїдом / триходовим клапаном:
+
+| Ручка пари | Очікуваний основний вихід (гідравліка) | Поведінка FSM |
+| --- | --- | --- |
+| Відкрита під час `PHASE1` / `PHASE2` | лінія пари / панарело (майже нульовий опір; невелика частина може підтискати клапан групи) | імпульси як звичайно |
+| Закрита mid-phase | потік через холдер / групу (тиск зростає) | імпульси **продовжуються**; фаза **не** завершується лише через close |
+
+Вимога відкритої ручки + `B3` на старті / resume — UI/безпека старту, не програмне перемикання гідравліки.
+
+Стенд і сценарії: [`quickstart.md`](../specs/002-descaling-program/quickstart.md).
+
 ---
 
 ## Посилання
 
-- Фіча: [`specs/001-main-brew-logic/`](../specs/001-main-brew-logic/)
-- FSM: [`contracts/main-fsm.md`](../specs/001-main-brew-logic/contracts/main-fsm.md)
-- Tunables: [`contracts/tunable-constants.md`](../specs/001-main-brew-logic/contracts/tunable-constants.md)
+- Фіча `001`: [`specs/001-main-brew-logic/`](../specs/001-main-brew-logic/)
+- Фіча `002` (декальцинація): [`specs/002-descaling-program/`](../specs/002-descaling-program/)
+- FSM brew/steam: [`contracts/main-fsm.md`](../specs/001-main-brew-logic/contracts/main-fsm.md)
+- FSM descale: [`contracts/descale-fsm.md`](../specs/002-descaling-program/contracts/descale-fsm.md)
+- Tunables `001`: [`contracts/tunable-constants.md`](../specs/001-main-brew-logic/contracts/tunable-constants.md)
+- Tunables `DESCALE_*`: [`contracts/descale-tunables.md`](../specs/002-descaling-program/contracts/descale-tunables.md)
 - Panel UART (споживач): [`contracts/panel-uart.md`](../specs/001-main-brew-logic/contracts/panel-uart.md)
+- Hold UART (`B3`/`R3`): [`contracts/panel-hold-uart.md`](../specs/002-descaling-program/contracts/panel-hold-uart.md)
 - Контракт панелі: [`button-panel-protocol.md`](button-panel-protocol.md)
 - База нагріву: [`thermoblock-pi-heater.md`](thermoblock-pi-heater.md) / `006`
+- Штатна уставка ~53 °C: [`pic16f1938-operating-modes.md`](pic16f1938-operating-modes.md)
 - Тестовий лінк: [`scripts/012_main_panel_link.cpp`](../scripts/012_main_panel_link.cpp)
-- Стенд: [`quickstart.md`](../specs/001-main-brew-logic/quickstart.md)
+- Стенд `001`: [`quickstart.md`](../specs/001-main-brew-logic/quickstart.md)
+- Стенд `002`: [`quickstart.md`](../specs/002-descaling-program/quickstart.md)

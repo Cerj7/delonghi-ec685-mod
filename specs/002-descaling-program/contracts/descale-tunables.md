@@ -37,12 +37,21 @@
 | `DESCALE_PHASE2_OFF_MS` | 500 | Пауза між імпульсами |
 | `DESCALE_PHASE2_NOFLOW_MS` | 1500 | No-flow під час ON → завершення фази 2 |
 
+## Heater
+
+| Constant | Default | Used for |
+| --- | --- | --- |
+| `DESCALE_PHASE1_TEMP_C` | 53 | Уставка ТЕНа **лише** в `DESCALE_PHASE1` (FR-006; штатний PIC ≈ ADC `0x0177`) |
+
+Prep / refill / wait-rinse / phase 2 / refill water: ТЕН force-off (0 %), окремий Tunable уставки не потрібен. Гістерезис — reuse PI з `001` (окремий band MAY, не обов’язковий у v1).
+
 ## Power
 
 | Constant | Default | Used for |
 | --- | --- | --- |
 | `DESCALE_PUMP_PCT` | 100 | Потужність під час ON (не потенціометр) |
 | `PUMP_OFF_PCT` | 0 | Явний стоп (reuse `001`) |
+| `HEATER_OFF_PCT` | 0 | Force-off поза фазою 1 (reuse / alias `001` якщо вже є) |
 
 ## Timing tolerances (test aids)
 
@@ -55,6 +64,7 @@
 
 Перед merge:
 
-1. `rg` по `013`: немає літералів `10000`, `1000`, `500`, `1500` у логіці descale поза Tunables (окрім коментарів / таблиць калібрування).
-2. Немає використання `STEAM_PULSE_*` всередині descale-фаз.
+1. `rg` по `013`: немає літералів `10000`, `1000`, `500`, `1500`, `53` у логіці descale поза Tunables (окрім коментарів / таблиць калібрування / посилань на docs).
+2. Немає використання `STEAM_PULSE_*` / еспресо-уставки всередині descale-фаз (фаза 1 бере лише `DESCALE_PHASE1_TEMP_C`).
 3. `FLOW_PULSES_PER_ML > 0` задокументовано в quickstart як prerequisite для об’ємних сценаріїв.
+4. Heater gate: 53 °C тільки в `DESCALE_PHASE1`; усі інші `DESCALE_*` (крім hold-countdown) — 0 %.

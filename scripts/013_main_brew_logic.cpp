@@ -71,6 +71,7 @@
 
 // =============================================================================
 // Tunables — specs/001-main-brew-logic/contracts/tunable-constants.md
+//             + specs/002-descaling-program/contracts/descale-tunables.md
 // Усі бізнес °C / мс / % / періоди тут. У тілі FSM/loop — лише імена констант
 // (допустимі 0/1 для булевої логіки, індекси циклів, розміри буферів протоколу).
 // =============================================================================
@@ -163,6 +164,30 @@ const unsigned long DECALC_INTERVAL_S =
 const uint16_t DECALC_EEPROM_MAGIC = 0xEC85u;  // Валідація блоку EEPROM (EC685)
 const unsigned long DECALC_SAVE_EVERY_S = 60;  // Flush uptime в EEPROM (допуск SC-008)
 
+// --- Descale program (specs/002-descaling-program/contracts/descale-tunables.md) ---
+// FR-016 / SC-007: усі бізнес-літерали програми декальцинації лише тут; у тілі
+// FSM/loop — імена констант. Об’ємні сценарії потребують FLOW_PULSES_PER_ML > 0.
+// Hold / enter
+const unsigned long DESCALE_HOLD_PROMPT_MS = 1000;     // OLED-відлік після утримання (FR-003)
+const unsigned long DESCALE_HOLD_ENTER_MS = 10000;     // Утримання → DESCALE_PREP (FR-001, SC-001)
+const unsigned long DESCALE_HOLD_ENTER_TOL_MS = 200;   // Допуск стенду SC-001 (тест)
+// Volume / flow
+const unsigned long DESCALE_PHASE_VOLUME_ML = 1000;    // Ціль об’єму фази 1 і 2 (FR-009)
+// Phase 1 (clean)
+const unsigned long DESCALE_PHASE1_ON_MS = 500;        // Імпульс помпи ON (FR-007, SC-003)
+const unsigned long DESCALE_PHASE1_OFF_MS = 1000;      // Пауза відмочування (FR-007)
+const unsigned long DESCALE_PHASE1_NOFLOW_MS = 1000;   // No-flow під час ON → refill/complete (FR-010)
+// Phase 2 (rinse)
+const unsigned long DESCALE_PHASE2_ON_MS = 500;        // Імпульс помпи ON (FR-008, SC-003)
+const unsigned long DESCALE_PHASE2_OFF_MS = 500;       // Пауза між імпульсами (FR-008)
+const unsigned long DESCALE_PHASE2_NOFLOW_MS = 1500;   // No-flow під час ON → refill/complete (FR-012)
+// Heater / power
+const float DESCALE_PHASE1_TEMP_C = 53.0f;             // Уставка ТЕНа лише в DESCALE_PHASE1 (FR-006)
+const uint8_t DESCALE_PUMP_PCT = 100;                  // Потужність під час ON (не потенціометр)
+// Timing tolerances (test aids)
+const unsigned long DESCALE_PULSE_TOL_MS = 50;         // Допуск SC-003
+const unsigned long DESCALE_DC0_MAX_LATENCY_MS = 1000; // Допуск SC-005 (DC0 після фази 2)
+
 // --- Link / buffers (contracts/panel-uart.md; як у 012_main_panel_link.cpp) ---
 // D9 RX ← D6 панелі, D8 TX → D5 панелі, 8N1 @ LINK_BAUD; USB debug @ PC_BAUD.
 const uint8_t PANEL_RX_PIN = 9;
@@ -171,8 +196,10 @@ const long LINK_BAUD = 19200;
 const long PC_BAUD = 115200;
 const uint8_t LINK_CODE_MAX_LEN = 3;  // Макс. довжина коду панелі (напр. P11)
 
-// --- Flow display ---
+// --- Flow display / volume ---
 // 0 = показувати імпульси флоуметра; >0 = мл (імпульси / FLOW_PULSES_PER_ML).
+// Descale volume (FR-009 / SC volume scenarios): MUST be > 0 у проді / стенді
+// з об’ємом; інакше мл з імпульсів недоступні (див. descale-tunables.md).
 const float FLOW_PULSES_PER_ML = 0.0f;
 
 // --- OLED 0.91" 128x32 I2C (SDA=A4, SCL=A5) ---
@@ -281,10 +308,80 @@ enum MachineState : uint8_t {
   STEAM_READY,
   STEAM_FLOW,
   STEAM_COOL,
+  // Descale FSM (data-model.md / contracts/descale-fsm.md) — stubs T006; handlers US1+
+  DESCALE_HOLD,
+  DESCALE_PREP,
+  DESCALE_PHASE1,
+  DESCALE_REFILL,
+  DESCALE_WAIT_RINSE,
+  DESCALE_PHASE2,
+  DESCALE_REFILL_WATER,
   FAULT,
 };
 
 MachineState machineState = ESPRESSO_HEAT;
+
+// --- DescaleHoldGesture (data-model.md; RAM only) ---
+// Arms R3 routing (panel-hold-uart.md). Hold enter/cancel rules → T012+.
+// Defaults: inactive → R3 no-op until hold arms active.
+struct DescaleHoldGesture {
+  unsigned long pressMs;  // millis() on B3
+  bool active;            // waiting for R3 / timeout enter
+  bool countdownVisible;  // after DESCALE_HOLD_PROMPT_MS
+};
+
+DescaleHoldGesture descaleHoldGesture = {0UL, false, false};
+
+// Resume ESPRESSO_READY / ESPRESSO_HEAT after hold cancel (R3 mid-countdown).
+// Captured in armDescaleHold(); not part of DescaleHoldGesture data-model row.
+MachineState descaleHoldResumeState = ESPRESSO_READY;
+
+// Last OLED countdown N while DESCALE_HOLD (force refresh on second change).
+unsigned int lastDescaleCountdownSec = 0xFFFF;
+
+// T014 / T021 / T022 / T025 / FR-005: OLED HANDLE_CLOSED overlay after B3 with
+// closed steam handle in DESCALE_PREP / REFILL / WAIT_RINSE / REFILL_WATER.
+bool descaleHandleClosedPrompt = false;
+
+// --- DescaleSession (data-model.md; RAM only — no EEPROM phase checkpoint) ---
+// Power cycle does not resume; phase / pulses live only in RAM.
+enum DescaleSessionPhase : uint8_t {
+  DESCALE_SESSION_NONE = 0,
+  DESCALE_SESSION_PHASE1,
+  DESCALE_SESSION_PHASE2,
+};
+
+enum DescalePulsePhase : uint8_t {
+  DESCALE_PULSE_PHASE_ON = 0,
+  DESCALE_PULSE_PHASE_OFF,
+};
+
+struct DescaleSession {
+  DescaleSessionPhase phase;
+  uint32_t phasePulses;               // pulses since phase start (refill keeps)
+  DescalePulsePhase pulsePhase;       // ON | OFF
+  unsigned long pulsePhaseStartedMs;  // start of current ON/OFF slice
+  unsigned long lastFlowPulseMs;      // updated from ISR/counter during phase
+  bool noFlowArmed;                   // true only during ON
+};
+
+DescaleSession descaleSession = {
+    DESCALE_SESSION_NONE, 0UL, DESCALE_PULSE_PHASE_ON, 0UL, 0UL, false,
+};
+
+// --- DescaleUiPrompt (data-model.md; FR-017) ---
+// IDs + Flash (F()/PROGMEM) UA strings. Show helpers below in OLED section.
+// 128×32 @ text size 1 ≈ 21×4 glyphs; shorten/wrap only on overflow.
+enum DescaleUiPrompt : uint8_t {
+  DESCALE_UI_COUNTDOWN = 0,
+  DESCALE_UI_PREP,
+  DESCALE_UI_HANDLE_CLOSED,
+  DESCALE_UI_PHASE1_RUN,
+  DESCALE_UI_REFILL,
+  DESCALE_UI_WAIT_RINSE,
+  DESCALE_UI_PHASE2_RUN,
+  DESCALE_UI_REFILL_WATER,
+};
 
 // --- Brew profile phase (data-model BrewProfile; FR-004) ---
 enum BrewPhase : uint8_t {
@@ -394,6 +491,35 @@ float flowDisplayValue(uint32_t pulses) {
   return (float)pulses;
 }
 
+// DescaleSession.phaseVolumeMl (derived): phasePulses / FLOW_PULSES_PER_ML.
+// FR-009 / research §5: volume criterion requires FLOW_PULSES_PER_ML > 0.
+float descalePhaseVolumeMl() {
+  if (FLOW_PULSES_PER_ML <= 0.0f) {
+    return 0.0f;
+  }
+  return (float)descaleSession.phasePulses / FLOW_PULSES_PER_ML;
+}
+
+// T018 / FR-009: phase volume ≥ DESCALE_PHASE_VOLUME_ML (compare hook for T019/T020).
+bool descalePhaseVolumeReached() {
+  if (FLOW_PULSES_PER_ML <= 0.0f) {
+    return false;
+  }
+  return descalePhaseVolumeMl() >= (float)DESCALE_PHASE_VOLUME_ML;
+}
+
+// T018 / FR-009: fold ISR flow counter into DescaleSession.phasePulses;
+// stamp lastFlowPulseMs on new pulses (no-flow arm uses it in T019).
+void accumulateDescalePhasePulses() {
+  const uint32_t delta = getFlowPulses();
+  if (delta == 0UL) {
+    return;
+  }
+  descaleSession.phasePulses += delta;
+  descaleSession.lastFlowPulseMs = millis();
+  resetFlowPulses();
+}
+
 // ---------------------------------------------------------------------------
 // Помпа (диммер)
 // ---------------------------------------------------------------------------
@@ -449,10 +575,19 @@ void setPumpPercent(uint8_t percent) {
 
 // Pump authority (contracts/main-fsm.md): non-zero лише в COLD_FLUSH / BREW_2 /
 // STEAM_FLOW / STEAM_COOL (pulse while handle open — FR-028 / T073).
+// Descale (contracts/descale-fsm.md / FR-007/008): PHASE1/PHASE2 лише під час
+// pulse ON — prep/wait/refill/HOLD і pulse OFF → PUMP_OFF_PCT.
 // Усі інші стани → PUMP_OFF_PCT незалежно від pot A0.
 bool pumpMayRun() {
-  return machineState == COLD_FLUSH || machineState == BREW_2 ||
-         machineState == STEAM_FLOW || machineState == STEAM_COOL;
+  if (machineState == COLD_FLUSH || machineState == BREW_2 ||
+      machineState == STEAM_FLOW || machineState == STEAM_COOL) {
+    return true;
+  }
+  if ((machineState == DESCALE_PHASE1 || machineState == DESCALE_PHASE2) &&
+      descaleSession.pulsePhase == DESCALE_PULSE_PHASE_ON) {
+    return true;
+  }
+  return false;
 }
 
 void enforcePumpAuthority() {
@@ -464,22 +599,61 @@ void enforcePumpAuthority() {
 }
 
 // ---------------------------------------------------------------------------
+// Descale heater gates (FR-006 / contracts/descale-fsm.md)
+// ---------------------------------------------------------------------------
+// True for any DESCALE_* program/hold state (FR-014 / T010 fault abort scope).
+bool isDescaleMachineState() {
+  return machineState == DESCALE_HOLD || machineState == DESCALE_PREP ||
+         machineState == DESCALE_PHASE1 || machineState == DESCALE_REFILL ||
+         machineState == DESCALE_WAIT_RINSE || machineState == DESCALE_PHASE2 ||
+         machineState == DESCALE_REFILL_WATER;
+}
+
+// DESCALE_HOLD: не викликати force-off — штатний еспресо-ПІ (countdown).
+// DESCALE_PHASE1: єдиний стан з уставкою DESCALE_PHASE1_TEMP_C (не espresso/steam).
+// PREP / REFILL / WAIT_RINSE / PHASE2 / REFILL_WATER: ТЕН 0 %, без ПІ.
+bool descaleHeaterForceOff() {
+  return machineState == DESCALE_PREP || machineState == DESCALE_REFILL ||
+         machineState == DESCALE_WAIT_RINSE || machineState == DESCALE_PHASE2 ||
+         machineState == DESCALE_REFILL_WATER;
+}
+
+// true → PHASE1 owns PI; *outSetpointC = DESCALE_PHASE1_TEMP_C.
+// false → не PHASE1 (HOLD = espresso path; force-off states → descaleHeaterForceOff).
+bool descaleHeaterSetpoint(float *outSetpointC) {
+  if (machineState != DESCALE_PHASE1) {
+    return false;
+  }
+  if (outSetpointC != nullptr) {
+    *outSetpointC = DESCALE_PHASE1_TEMP_C;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Уставки / ready / fault (data-model.md, contracts/main-fsm.md)
 // ---------------------------------------------------------------------------
+void refreshActiveTarget();  // used by setTargetMode (defined below)
+
 // Параметр — uint8_t, не TargetMode: Arduino IDE генерує прототипи до enum
 // у .ino, інакше «TargetMode was not declared in this scope».
 void setTargetMode(uint8_t mode) {
   targetMode = static_cast<TargetMode>(mode);
-  if (mode == TARGET_STEAM) {
-    // T080 / FR-032: ready/heat = 120; STEAM_FLOW overrides to 128.
-    activeTargetC = (machineState == STEAM_FLOW) ? STEAM_FLOW_TARGET_C
-                                                 : STEAM_READY_TARGET_C;
-  } else {
-    activeTargetC = espressoTargetC;
-  }
+  // refreshActiveTarget gates DESCALE_* (FR-006): PHASE1 → 53 °C; force-off
+  // states skip espresso/steam; HOLD / non-descale → espresso or steam as before.
+  refreshActiveTarget();
 }
 
 void refreshActiveTarget() {
+  // FR-006: DESCALE_* never takes espresso/steam setpoint except HOLD countdown.
+  float descaleSp = 0.0f;
+  if (descaleHeaterSetpoint(&descaleSp)) {
+    activeTargetC = descaleSp;
+    return;
+  }
+  if (descaleHeaterForceOff()) {
+    return;
+  }
   if (targetMode == TARGET_STEAM) {
     activeTargetC = (machineState == STEAM_FLOW) ? STEAM_FLOW_TARGET_C
                                                  : STEAM_READY_TARGET_C;
@@ -557,10 +731,14 @@ void showFaultOled() {
 }
 
 void sendToPanel(const char *code);  // defined with panel UART section
+void handleServiceDc0();               // USB + descale phase-2 success (FR-013)
 
 // Latched FAULT: heater OFF, pump 0, OLED fault. Exit v1 = power cycle only.
 // T022 / quickstart S6 / SC fault stop: abort active flush/brew/steam panel
 // frames so LEDs are not left dangling (P11→P10, P21→P20, SS1→SS0).
+// FR-014 / T010 / contracts/descale-fsm.md: from any DESCALE_* — same latch
+// (ТЕН OFF, PUMP_OFF_PCT); MUST NOT send DC0 / clear DecalcTimer (dcLatched /
+// accumulatedOnSeconds / EEPROM untouched — never call handleServiceDc0 here).
 void enterFault() {
   if (machineState == FAULT) {
     heaterPercent = 0;
@@ -571,13 +749,19 @@ void enterFault() {
     return;
   }
 
-  // Abort active portion / steam flow before latching, then pump 0.
+  // Abort active portion / steam flow / descale program before latching.
   if (machineState == COLD_FLUSH) {
     sendToPanel("P10");
   } else if (machineState == BREW_2) {
     sendToPanel("P20");
   } else if (machineState == STEAM_FLOW) {
     sendToPanel("SS0");
+  } else if (isDescaleMachineState()) {
+    // Drop hold + session; leave DC1 / DecalcTimer as-is (no DC0).
+    descaleHoldGesture = {0UL, false, false};
+    descaleSession = {
+        DESCALE_SESSION_NONE, 0UL, DESCALE_PULSE_PHASE_ON, 0UL, 0UL, false,
+    };
   }
 
   machineState = FAULT;
@@ -682,19 +866,35 @@ void updateHeaterControl(unsigned long now) {
   lastControlMs = now;
 
   // Нагрів вимкнено: FAULT, COLD_FLUSH (FR-004), STEAM_COOL (FR-028 / T073),
+  // descale force-off (FR-006: PREP/REFILL/WAIT_RINSE/PHASE2/REFILL_WATER),
   // ручка в мінімумі (лише espresso), термопара, cutoff. У всіх цих випадках
   // інтеграл скидається, щоб після повернення в робочий режим не було
   // «пострілу» накопиченою потужністю. (Heat-up PI select = T074.)
+  // DESCALE_HOLD не тут — лишає еспресо-ПІ (FR-006 countdown).
+  // FR-014 / T010: force-off DESCALE_* still honors SAFETY_CUTOFF → enterFault
+  // (no DC0); HOLD/PHASE1 use the shared cutoff path below.
   if (machineState == FAULT || machineState == COLD_FLUSH ||
-      machineState == STEAM_COOL) {
+      machineState == STEAM_COOL || descaleHeaterForceOff()) {
     heaterIntegral = 0.0f;
     heaterPercent = 0;
+    if (descaleHeaterForceOff() && tempValid &&
+        tempBlockC >= SAFETY_CUTOFF_C) {
+      enterFault();
+    }
     return;
   }
 
+  // FR-006: лише DESCALE_PHASE1 — уставка DESCALE_PHASE1_TEMP_C (не pot/steam).
+  float descaleSp = 0.0f;
+  const bool descalePhase1Pi = descaleHeaterSetpoint(&descaleSp);
+  if (descalePhase1Pi) {
+    activeTargetC = descaleSp;
+  }
+
   // TARGET_OFF_BAND стосується лише еспресо: у парі pot A1 не гасить ТЕН (FR-013).
+  // DESCALE_PHASE1 ігнорує pot off-band — інакше мін. A1 гасив би 53 °C ПІ.
   const bool espressoOffBand =
-      targetMode == TARGET_ESPRESSO &&
+      !descalePhase1Pi && targetMode == TARGET_ESPRESSO &&
       espressoTargetC <= TARGET_MIN_C + TARGET_OFF_BAND_C;
   const bool heaterAllowed = tempValid && !espressoOffBand;
   // FR-018 / T032: SAFETY_CUTOFF_C захисний і під час утримання пару (120/128).
@@ -710,7 +910,7 @@ void updateHeaterControl(unsigned long now) {
   // FR-027 / SC-010/012 / T074: профіль кожен CONTROL_INTERVAL_MS (≤ 1 тік).
   // heat-up — ESPRESSO_HEAT / STEAM_HEAT лише поки Tt < activeTargetC;
   // brew-flow лише BREW_2 && FLOW; steam-flow — STEAM_FLOW; інакше base
-  // (ready / hold-in-band / preinfuse / pause / STEAM_READY).
+  // (ready / hold-in-band / preinfuse / pause / STEAM_READY / DESCALE_PHASE1).
   // FF адитивний лише під час flow; без target-offset; SAFETY_CUTOFF_C спільний (вище).
   // HE0/HS0 критерії не змінюються тут.
   float kp = HEATER_KP;
@@ -789,6 +989,8 @@ void updateTemperature(unsigned long now) {
 
   // Валідність для регулятора: не NAN, у правдоподібних межах і не «залиплий»
   // нуль. Інакше ПІ бачив би «дуже холодно» і тримав ТЕН на 100 % наосліп.
+  // FR-014 / T010: invalid TC from any DESCALE_* → enterFault (no DC0) same as
+  // brew/steam; enterFault clears hold/session without DecalcTimer clear.
   const bool plausible = !isnan(tempBlockC) && tempBlockC > TEMP_VALID_MIN_C &&
                          tempBlockC < TEMP_VALID_MAX_C && zeroTempStreak == 0;
   if (plausible) {
@@ -961,6 +1163,162 @@ void showSteamOled() {
   display.display();
 }
 
+// T009 / FR-017: DescaleUiPrompt → UA Flash lines (data-model.md).
+// Y = 0/8/16/24 (4 rows @ size 1 on 128×32). FSM refresh rules → T012+.
+// countdownSec: remaining whole seconds for COUNTDOWN only.
+void showDescaleUiPrompt(DescaleUiPrompt id, unsigned int countdownSec) {
+  if (!displayOk) {
+    return;
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  switch (id) {
+    case DESCALE_UI_COUNTDOWN:
+      // «Режим декальцинації через N сек»
+      display.setCursor(0, 0);
+      display.print(F("Режим декальцинації"));
+      display.setCursor(0, 8);
+      display.print(F("через "));
+      display.print(countdownSec);
+      display.print(F(" сек"));
+      break;
+
+    case DESCALE_UI_PREP:
+      // «Залийте 1 л очисника, відкрийте ручку та натисніть кнопку "Пар"»
+      display.setCursor(0, 0);
+      display.print(F("Залийте 1 л очисника,"));
+      display.setCursor(0, 8);
+      display.print(F("відкрийте ручку та"));
+      display.setCursor(0, 16);
+      display.print(F("натисніть кнопку Пар"));
+      break;
+
+    case DESCALE_UI_HANDLE_CLOSED:
+      // Пояснення: відкрийте ручку пари
+      display.setCursor(0, 0);
+      display.print(F("Відкрийте ручку пари"));
+      break;
+
+    case DESCALE_UI_PHASE1_RUN:
+      // «Виконується декальцинація: фаза очистки»
+      display.setCursor(0, 0);
+      display.print(F("Виконується"));
+      display.setCursor(0, 8);
+      display.print(F("декальцинація:"));
+      display.setCursor(0, 16);
+      display.print(F("фаза очистки"));
+      break;
+
+    case DESCALE_UI_REFILL:
+      // «Долийте очисник і натисніть кнопку "Пар"»
+      display.setCursor(0, 0);
+      display.print(F("Долийте очисник і"));
+      display.setCursor(0, 8);
+      display.print(F("натисніть кнопку Пар"));
+      break;
+
+    case DESCALE_UI_WAIT_RINSE:
+      // «Залийте 1 л води та натисніть кнопку "Пар"»
+      display.setCursor(0, 0);
+      display.print(F("Залийте 1 л води та"));
+      display.setCursor(0, 8);
+      display.print(F("натисніть кнопку Пар"));
+      break;
+
+    case DESCALE_UI_PHASE2_RUN:
+      // Виконання промивання (дзеркало PHASE1_RUN)
+      display.setCursor(0, 0);
+      display.print(F("Виконується"));
+      display.setCursor(0, 8);
+      display.print(F("декальцинація:"));
+      display.setCursor(0, 16);
+      display.print(F("фаза промивання"));
+      break;
+
+    case DESCALE_UI_REFILL_WATER:
+      // «Долийте воду і натисніть кнопку "Пар"»
+      display.setCursor(0, 0);
+      display.print(F("Долийте воду і"));
+      display.setCursor(0, 8);
+      display.print(F("натисніть кнопку Пар"));
+      break;
+
+    default:
+      break;
+  }
+
+  display.display();
+}
+
+// T012 / FR-003: whole seconds remaining until DESCALE_HOLD_ENTER_MS (ceil).
+unsigned int descaleHoldCountdownSec(unsigned long now) {
+  if (!descaleHoldGesture.active) {
+    return 0;
+  }
+  const unsigned long elapsed = now - descaleHoldGesture.pressMs;
+  if (elapsed >= DESCALE_HOLD_ENTER_MS) {
+    return 0;
+  }
+  const unsigned long remainingMs = DESCALE_HOLD_ENTER_MS - elapsed;
+  return (unsigned int)((remainingMs + 999UL) / 1000UL);
+}
+
+// Map DESCALE_* → prompt id. HOLD countdown N is computed by callers (T012).
+// Returns false if state has no static prompt (e.g. HOLD before countdown).
+bool showDescaleOledForState(unsigned int countdownSec) {
+  switch (machineState) {
+    case DESCALE_HOLD:
+      if (!descaleHoldGesture.countdownVisible) {
+        return false;
+      }
+      showDescaleUiPrompt(DESCALE_UI_COUNTDOWN, countdownSec);
+      return true;
+    case DESCALE_PREP:
+      // T014: HANDLE_CLOSED overlay until open-handle B3 starts PHASE1.
+      if (descaleHandleClosedPrompt) {
+        showDescaleUiPrompt(DESCALE_UI_HANDLE_CLOSED, 0);
+      } else {
+        showDescaleUiPrompt(DESCALE_UI_PREP, 0);
+      }
+      return true;
+    case DESCALE_PHASE1:
+      showDescaleUiPrompt(DESCALE_UI_PHASE1_RUN, 0);
+      return true;
+    case DESCALE_REFILL:
+      // T021: HANDLE_CLOSED overlay until open-handle B3 resumes PHASE1.
+      if (descaleHandleClosedPrompt) {
+        showDescaleUiPrompt(DESCALE_UI_HANDLE_CLOSED, 0);
+      } else {
+        showDescaleUiPrompt(DESCALE_UI_REFILL, 0);
+      }
+      return true;
+    case DESCALE_WAIT_RINSE:
+      // T022: HANDLE_CLOSED overlay until open-handle B3 starts PHASE2.
+      if (descaleHandleClosedPrompt) {
+        showDescaleUiPrompt(DESCALE_UI_HANDLE_CLOSED, 0);
+      } else {
+        showDescaleUiPrompt(DESCALE_UI_WAIT_RINSE, 0);
+      }
+      return true;
+    case DESCALE_PHASE2:
+      showDescaleUiPrompt(DESCALE_UI_PHASE2_RUN, 0);
+      return true;
+    case DESCALE_REFILL_WATER:
+      // T025: HANDLE_CLOSED overlay until open-handle B3 resumes PHASE2.
+      if (descaleHandleClosedPrompt) {
+        showDescaleUiPrompt(DESCALE_UI_HANDLE_CLOSED, 0);
+      } else {
+        showDescaleUiPrompt(DESCALE_UI_REFILL_WATER, 0);
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
 void updateOled(unsigned long now) {
   // T083 / T084 / T090: heat/ready + BREW_2 + COLD_FLUSH @ BREW_DISPLAY_INTERVAL_MS.
   const bool brewDisplay =
@@ -998,6 +1356,21 @@ void updateOled(unsigned long now) {
   if (machineState == STEAM_HEAT || machineState == STEAM_READY ||
       machineState == STEAM_FLOW || machineState == STEAM_COOL) {
     showSteamOled();
+    return;
+  }
+
+  // T012 / FR-003: DESCALE_HOLD — espresso metrics until prompt, then countdown N.
+  if (machineState == DESCALE_HOLD) {
+    if (descaleHoldGesture.countdownVisible) {
+      showDescaleUiPrompt(DESCALE_UI_COUNTDOWN, descaleHoldCountdownSec(now));
+    } else {
+      showEspressoHeatReadyOled();
+    }
+    return;
+  }
+
+  // T009 / T014: other DESCALE_* static prompts (+ HANDLE_CLOSED in PREP)
+  if (showDescaleOledForState(0)) {
     return;
   }
 
@@ -1163,7 +1536,8 @@ void stopBrew2() {
 // FR-009 / FR-025 / T044 / T050: enter / return to steam (ESPRESSO_READY or STEAM_COOL via B3).
 // contracts/main-fsm.md — enterSteam()
 void enterSteam() {
-  // FR-018: FAULT latched until power cycle — never enter steam from fault
+  // FR-018: FAULT latched until power cycle — never enter steam from fault.
+  // T016: no dcLatched/DC1 gate — short «пар» and cool-interrupt steam alike.
   if (machineState == FAULT) {
     return;
   }
@@ -1227,11 +1601,174 @@ void updateBrewPhases(unsigned long now) {
 // ---------------------------------------------------------------------------
 // FSM dispatch stubs (contracts/main-fsm.md button matrix + loop tick)
 // ---------------------------------------------------------------------------
-// Central button entry: framing delivers only B1/B2/B3 as '1'/'2'/'3'.
-// Bodies stay empty until US handlers; ignore paths match the contract matrix.
+// T011 / FR-001, FR-002, FR-018: arm hold from espresso ready/heat.
+// Does NOT enterSteam(); short-press steam path is R3 in T012.
+void armDescaleHold() {
+  // Capture resume target before leaving READY/HEAT (cancel path, T012).
+  descaleHoldResumeState = machineState;
+  descaleHoldGesture.pressMs = millis();
+  descaleHoldGesture.active = true;
+  descaleHoldGesture.countdownVisible = false;
+  lastDescaleCountdownSec = 0xFFFF;
+  machineState = DESCALE_HOLD;
+}
+
+// T012: clear hold gesture + OLED countdown bookkeeping.
+void clearDescaleHoldGesture() {
+  descaleHoldGesture = {0UL, false, false};
+  lastDescaleCountdownSec = 0xFFFF;
+}
+
+// T013 / FR-001, FR-004, FR-004a: HOLD elapsed ≥ ENTER → DESCALE_PREP.
+// Independent of dcLatched/DC1. Clears hold gesture so R3 after entry
+// MUST NOT cancel; sticky hold must not start pump (new B3 → T014).
+void enterDescalePrep() {
+  clearDescaleHoldGesture();
+  descaleHandleClosedPrompt = false;
+  descaleSession = {
+      DESCALE_SESSION_NONE, 0UL, DESCALE_PULSE_PHASE_ON, 0UL, 0UL, false,
+  };
+  setPumpPercent(PUMP_OFF_PCT);
+  // descale-fsm MAY: neutralize brew/steam LEDs once so DC1 stays visible.
+  sendToPanel("SS0");
+  sendToPanel("HS0");
+  sendToPanel("LT0");
+  // Heater force-off via descaleHeaterForceOff() once state is PREP (FR-004).
+  machineState = DESCALE_PREP;
+  lastOledMs = 0;  // force OLED PREP «Залийте 1 л очисника…»
+}
+
+// T015 / FR-006, FR-006a: PREP (or later refill resume) → DESCALE_PHASE1.
+// OLED PHASE1_RUN; PI @ DESCALE_PHASE1_TEMP_C; pulse ON immediately (no temp-gate).
+// Pulse ON/OFF slices advanced in updateMachineState (T017); refill resume → T021.
+// T018 / FR-009: fresh entry zeros phasePulses; resume from refill keeps them;
+// ISR counter reset so only new pulses accumulate on top of kept total.
+void enterDescalePhase1() {
+  clearDescaleHoldGesture();
+  descaleHandleClosedPrompt = false;
+
+  const bool resume = (descaleSession.phase == DESCALE_SESSION_PHASE1);
+  const uint32_t keptPulses = resume ? descaleSession.phasePulses : 0UL;
+  const unsigned long now = millis();
+
+  descaleSession.phase = DESCALE_SESSION_PHASE1;
+  descaleSession.phasePulses = keptPulses;
+  descaleSession.pulsePhase = DESCALE_PULSE_PHASE_ON;
+  descaleSession.pulsePhaseStartedMs = now;
+  descaleSession.lastFlowPulseMs = now;
+  descaleSession.noFlowArmed = true;
+  resetFlowPulses();
+
+  machineState = DESCALE_PHASE1;
+  // FR-006: heater setpoint 53 °C via descaleHeaterSetpoint / refreshActiveTarget.
+  refreshActiveTarget();
+  // FR-006a: start pulse path immediately — pumpMayRun true while pulse ON.
+  setPumpPercent(DESCALE_PUMP_PCT);
+  lastOledMs = 0;  // force OLED PHASE1_RUN «Виконується декальцинація: фаза очистки»
+}
+
+// T019 / FR-010: no-flow during pulse ON + volume < target → DESCALE_REFILL.
+// Keep phasePulses / session phase (resume → T021); keep DC1 (no DC0/clear).
+// Pump 0; heater 0 % via descaleHeaterForceOff once state is REFILL.
+// FR-014a: no auto-timeout abort while waiting for refill B3.
+void enterDescaleRefill() {
+  descaleHandleClosedPrompt = false;
+  descaleSession.noFlowArmed = false;
+  setPumpPercent(PUMP_OFF_PCT);
+  machineState = DESCALE_REFILL;
+  lastOledMs = 0;  // OLED REFILL «Долийте очисник і натисніть кнопку "Пар"»
+}
+
+// T020 / FR-011, FR-014: phase-1 volume ≥ DESCALE_PHASE_VOLUME_ML (or no-flow
+// ON with volume already ≥ target) → DESCALE_WAIT_RINSE. Pump 0; heater 0 %
+// via descaleHeaterForceOff. MUST NOT send DC0 / clear DecalcTimer (DC1 stays).
+void enterDescaleWaitRinse() {
+  descaleHandleClosedPrompt = false;
+  descaleSession.noFlowArmed = false;
+  setPumpPercent(PUMP_OFF_PCT);
+  machineState = DESCALE_WAIT_RINSE;
+  lastOledMs = 0;  // OLED WAIT_RINSE «Залийте 1 л води та натисніть кнопку "Пар"»
+}
+
+// T022 / FR-005, FR-014a: WAIT_RINSE → DESCALE_PHASE2 (fresh phase zeros
+// phasePulses). Resume from REFILL_WATER keeps pulses (T025). Heater stays
+// force-off. Pulse ON/OFF slices advanced in updateMachineState (T023).
+// Volume / no-flow → T024 (REFILL_WATER or success stub).
+void enterDescalePhase2() {
+  descaleHandleClosedPrompt = false;
+
+  const bool resume = (descaleSession.phase == DESCALE_SESSION_PHASE2);
+  const uint32_t keptPulses = resume ? descaleSession.phasePulses : 0UL;
+  const unsigned long now = millis();
+
+  descaleSession.phase = DESCALE_SESSION_PHASE2;
+  descaleSession.phasePulses = keptPulses;
+  descaleSession.pulsePhase = DESCALE_PULSE_PHASE_ON;
+  descaleSession.pulsePhaseStartedMs = now;
+  descaleSession.lastFlowPulseMs = now;
+  descaleSession.noFlowArmed = true;
+  resetFlowPulses();
+
+  machineState = DESCALE_PHASE2;
+  // FR-006: heater force-off via descaleHeaterForceOff (PHASE2).
+  // T023: entry arms pulse ON; ON/OFF slices in updateMachineState.
+  setPumpPercent(DESCALE_PUMP_PCT);
+  lastOledMs = 0;  // force OLED PHASE2_RUN «Виконується декальцинація: фаза промивання»
+}
+
+// T024 / FR-012: no-flow during phase-2 ON + volume < target → DESCALE_REFILL_WATER.
+// Keep phasePulses / session phase (resume → T025); keep DC1 (MUST NOT DC0).
+// Pump 0; heater 0 % via descaleHeaterForceOff once state is REFILL_WATER.
+// FR-014a: no auto-timeout abort while waiting for refill-water B3.
+void enterDescaleRefillWater() {
+  descaleHandleClosedPrompt = false;
+  descaleSession.noFlowArmed = false;
+  setPumpPercent(PUMP_OFF_PCT);
+  machineState = DESCALE_REFILL_WATER;
+  lastOledMs = 0;  // OLED REFILL_WATER «Долийте воду і натисніть кнопку "Пар"»
+}
+
+// T024 / T026 / FR-012a, FR-013, SC-005: phase-2 volume ≥ DESCALE_PHASE_VOLUME_ML
+// (or no-flow ON with volume already ≥ target) → success. Pump 0; shared clear
+// identical to USB DC0 via handleServiceDc0() (sendToPanel("DC0") + dcLatched=false
+// + accumulatedOnSeconds=0 + EEPROM) synchronously so latency ≪
+// DESCALE_DC0_MAX_LATENCY_MS; then coolOrReady() → espresso heat-or-ready
+// (TARGET_ESPRESSO / STEAM_COOL→ready — not steam target).
+void completeDescalePhase2Success() {
+  descaleHandleClosedPrompt = false;
+  descaleSession.noFlowArmed = false;
+  setPumpPercent(PUMP_OFF_PCT);
+  descaleSession = {
+      DESCALE_SESSION_NONE, 0UL, DESCALE_PULSE_PHASE_ON, 0UL, 0UL, false,
+  };
+  // FR-013 / SC-005: same DecalcTimer clear as USB path (sync ≪ DESCALE_DC0_MAX_LATENCY_MS).
+  handleServiceDc0();
+  coolOrReady();
+}
+
+// T012 / FR-003: R3 with prompt ≤ elapsed < enter — cancel countdown, no steam.
+void cancelDescaleHoldToEspresso() {
+  clearDescaleHoldGesture();
+  setPumpPercent(PUMP_OFF_PCT);
+  setTargetMode(TARGET_ESPRESSO);
+  machineState = descaleHoldResumeState;
+  if (machineState != ESPRESSO_READY && machineState != ESPRESSO_HEAT) {
+    machineState = ESPRESSO_HEAT;
+  }
+  lastOledMs = 0;
+}
+
+// Central button entry: framing delivers B1/B2/B3 as '1'/'2'/'3'.
+// R3 (steam release) → onPanelSteamRelease(); B3 from READY/HEAT arms
+// DESCALE_HOLD (T011); short steam via R3 is T012 (panel-hold-uart.md).
 void onPanelButton(char code) {
-  // FR-003 / matrix: ESPRESSO_HEAT + FAULT — no pump, mode, or indication side effects
-  if (machineState == ESPRESSO_HEAT || machineState == FAULT) {
+  // FR-018 / T011: FAULT — ignore all buttons (no hold, no steam)
+  if (machineState == FAULT) {
+    return;
+  }
+
+  // 001 matrix: ESPRESSO_HEAT ignores B1/B2; B3 may arm DESCALE_HOLD (T011)
+  if (machineState == ESPRESSO_HEAT && code != '3') {
     return;
   }
 
@@ -1242,13 +1779,21 @@ void onPanelButton(char code) {
       } else if (code == '2') {
         startBrew2();
       } else if (code == '3') {
-        // FR-009 / T044: B3 → enterSteam() (HS0 if already hot, else HS1)
-        enterSteam();
+        // T011: B3 → DESCALE_HOLD + pressMs; not enterSteam() (R3 → T012)
+        armDescaleHold();
+      }
+      break;
+
+    case ESPRESSO_HEAT:
+      // T011 / descale-fsm: B3 → DESCALE_HOLD (same as READY)
+      if (code == '3') {
+        armDescaleHold();
       }
       break;
 
     case COLD_FLUSH:
       // FR-005 / T067: repeat B1 → early stop; B2/B3 ignored (no side effects)
+      // T011: brew — ignore B3 for DESCALE_HOLD
       if (code == '1') {
         stopColdFlush();
       }
@@ -1258,6 +1803,7 @@ void onPanelButton(char code) {
     case BREW_2:
       // FR-007 / T024 / T068: only B2 stops; B1 MUST NOT start cold flush (FR-004);
       // B1/B3 — no pump/mode/indication side effects
+      // T011: brew — ignore B3 for DESCALE_HOLD
       if (code == '2') {
         stopBrew2();
       }
@@ -1266,6 +1812,7 @@ void onPanelButton(char code) {
     case STEAM_HEAT:
       // FR-010/014/021/022 / T070: B1/B2 → coolOrReady() (ONLY steam exit to LT1);
       // B3 ignore (supersedes T028 B3-cancel). B1 MUST NOT start cold flush (FR-004).
+      // T011: steam — ignore B3 for DESCALE_HOLD
       if (code == '1' || code == '2') {
         coolOrReady();
       }
@@ -1275,6 +1822,7 @@ void onPanelButton(char code) {
     case STEAM_READY:
       // FR-010/014/021/022 / T070: B1/B2 → coolOrReady(); B3 ignore (NOT cancel, NOT SS1).
       // Supersedes T029 B3-cancel. B1 @ HS0/SS0 is steam-exit, not flush (FR-004).
+      // T011: steam — ignore B3 for DESCALE_HOLD
       if (code == '1' || code == '2') {
         coolOrReady();
       }
@@ -1284,6 +1832,7 @@ void onPanelButton(char code) {
     case STEAM_FLOW:
       // FR-010/014/021/022 / T070: B1/B2 → coolOrReady(); B3 ignore.
       // B1/B2 MUST NOT start cold flush (FR-004); supersedes T031/T050 B1-ignore here.
+      // T011: steam — ignore B3 for DESCALE_HOLD
       if (code == '1' || code == '2') {
         coolOrReady();
       }
@@ -1293,16 +1842,129 @@ void onPanelButton(char code) {
     case STEAM_COOL:
       // FR-025 / SC-009 / T050: B3 → enterSteam() (interrupt cool; HS0 if hot else HS1)
       // T068 / FR-004/FR-022: B1/B2 block flush/brew during LT1…LT0
+      // T011: steam — do not arm DESCALE_HOLD
       if (code == '3') {
         enterSteam();
       }
       break;
 
-    case ESPRESSO_HEAT:
+    case DESCALE_HOLD:
+      // T029 / descale-fsm button matrix: B1/B2 ignore; B3 already held —
+      // ignore (R3 → onPanelSteamRelease: short steam / cancel / race PREP).
+      break;
+
+    case DESCALE_PREP:
+      // T014 / T029 / FR-004a, FR-005, FR-015: new B3 front + open handle →
+      // PHASE1; closed handle + B3 → stay + OLED HANDLE_CLOSED; ignore B1/B2
+      // (no cold flush / espresso). Sticky hold that entered PREP does not
+      // re-fire B3 (UART edge) → no pump. R3 ignored via inactive gesture.
+      if (code == '3') {
+        if (isSteamHandleOpen()) {
+          enterDescalePhase1();
+        } else {
+          descaleHandleClosedPrompt = true;
+          lastOledMs = 0;
+        }
+      }
+      // code == '1' / '2': ignore (no cold flush / brew)
+      break;
+
+    case DESCALE_REFILL:
+      // T021 / T029 / FR-005, FR-014a, FR-015: new B3 + open handle → resume
+      // PHASE1 (keeps phasePulses + 53 °C); closed → HANDLE_CLOSED; ignore
+      // B1/B2 (no cold flush / espresso). R3 ignored (no active hold).
+      // No auto-timeout abort while waiting (FR-014a).
+      if (code == '3') {
+        if (isSteamHandleOpen()) {
+          enterDescalePhase1();
+        } else {
+          descaleHandleClosedPrompt = true;
+          lastOledMs = 0;
+        }
+      }
+      // code == '1' / '2': ignore
+      break;
+
+    case DESCALE_WAIT_RINSE:
+      // T022 / T029 / FR-005, FR-014a, FR-015: new B3 + open handle → PHASE2
+      // (zeros phasePulses); closed → HANDLE_CLOSED; ignore B1/B2 (no cold
+      // flush / espresso). R3 ignored (no active hold). No auto-timeout.
+      if (code == '3') {
+        if (isSteamHandleOpen()) {
+          enterDescalePhase2();
+        } else {
+          descaleHandleClosedPrompt = true;
+          lastOledMs = 0;
+        }
+      }
+      // code == '1' / '2': ignore
+      break;
+
+    case DESCALE_REFILL_WATER:
+      // T025 / T029 / FR-012, FR-014a, FR-015: new B3 + open handle → resume
+      // PHASE2 (keeps phasePulses; heater 0 %); closed → HANDLE_CLOSED;
+      // ignore B1/B2 (no cold flush / espresso). R3 ignored (no active hold).
+      // No auto-timeout abort while waiting (FR-014a).
+      if (code == '3') {
+        if (isSteamHandleOpen()) {
+          enterDescalePhase2();
+        } else {
+          descaleHandleClosedPrompt = true;
+          lastOledMs = 0;
+        }
+      }
+      // code == '1' / '2': ignore
+      break;
+
+    case DESCALE_PHASE1:
+    case DESCALE_PHASE2:
+      // T028 / T029 / US4 / descale-fsm: B1/B2/B3 ignored (no flush/brew/
+      // cancel). Mid-phase handle close is hydraulic-only — never gated here.
+      // R3 no-op (gesture inactive). Pulses continue until volume/no-flow/FAULT.
+      break;
+
     case FAULT:
       // unreachable: early return above
       break;
   }
+}
+
+// panel-hold-uart.md / descale-fsm.md / T012 + T013:
+// R3 without active hold-gesture = no-op (incl. after PREP entry — FR-004a).
+// elapsed < prompt → short steam (enterSteam / 001 matrix);
+// prompt ≤ elapsed < enter → cancel countdown, restore READY/HEAT, no steam;
+// elapsed ≥ enter → enterDescalePrep (race if tick not yet run); never cancel.
+void onPanelSteamRelease() {
+  if (!descaleHoldGesture.active) {
+    return;
+  }
+  if (machineState != DESCALE_HOLD) {
+    // Gesture stale outside HOLD (e.g. already PREP) — drop arm, do not steam
+    // or cancel program (FR-004a).
+    clearDescaleHoldGesture();
+    return;
+  }
+
+  const unsigned long now = millis();
+  const unsigned long elapsed = now - descaleHoldGesture.pressMs;
+
+  if (elapsed < DESCALE_HOLD_PROMPT_MS) {
+    // T016 / SC-001 / FR-001 edge: short «пар» (no hold ≥ prompt) → existing
+    // enterSteam() / 001 matrix. Independent of dcLatched / active DC1 —
+    // reminder must never gate steam (same with or without DC1).
+    clearDescaleHoldGesture();
+    lastOledMs = 0;
+    enterSteam();
+    return;
+  }
+
+  if (elapsed < DESCALE_HOLD_ENTER_MS) {
+    cancelDescaleHoldToEspresso();
+    return;
+  }
+
+  // elapsed ≥ ENTER: commit PREP if tick lagged; R3 MUST NOT cancel (FR-004a).
+  enterDescalePrep();
 }
 
 // Per-state tick from loop().
@@ -1468,6 +2130,183 @@ void updateMachineState(unsigned long now) {
         steamPulsePhaseStartMs = now;
       }
       break;
+    case DESCALE_HOLD: {
+      // T012 / FR-003 / FR-006a countdown: espresso PI stays (heater path);
+      // pump gated off (pumpMayRun). OLED countdown after PROMPT_MS.
+      setPumpPercent(PUMP_OFF_PCT);
+
+      if (!descaleHoldGesture.active) {
+        break;
+      }
+
+      const unsigned long elapsed = now - descaleHoldGesture.pressMs;
+
+      if (elapsed >= DESCALE_HOLD_PROMPT_MS) {
+        if (!descaleHoldGesture.countdownVisible) {
+          descaleHoldGesture.countdownVisible = true;
+          lastDescaleCountdownSec = 0xFFFF;
+          lastOledMs = 0;
+        }
+        const unsigned int sec = descaleHoldCountdownSec(now);
+        if (sec != lastDescaleCountdownSec) {
+          lastDescaleCountdownSec = sec;
+          lastOledMs = 0;  // refresh «через N сек» on second change
+        }
+      }
+
+      // T013 / FR-001, FR-004: elapsed ≥ ENTER → PREP regardless of dcLatched.
+      if (elapsed >= DESCALE_HOLD_ENTER_MS) {
+        enterDescalePrep();
+      }
+      break;
+    }
+    case DESCALE_PREP:
+      // T013 / FR-004: pump 0; heater force-off (descaleHeaterForceOff);
+      // OLED PREP / HANDLE_CLOSED via updateOled. New B3 → onPanelButton (T014).
+      setPumpPercent(PUMP_OFF_PCT);
+      break;
+    case DESCALE_REFILL:
+      // T021 / FR-014a: pump 0; heater force-off (descaleHeaterForceOff);
+      // OLED REFILL / HANDLE_CLOSED via updateOled. New B3 → onPanelButton.
+      // No auto-timeout abort — wait indefinitely for refill B3.
+      setPumpPercent(PUMP_OFF_PCT);
+      break;
+    case DESCALE_WAIT_RINSE:
+      // T022 / FR-014a: pump 0; heater force-off (descaleHeaterForceOff);
+      // OLED WAIT_RINSE / HANDLE_CLOSED via updateOled. New B3 → onPanelButton.
+      // No auto-timeout abort — wait indefinitely for rinse B3.
+      setPumpPercent(PUMP_OFF_PCT);
+      break;
+    case DESCALE_REFILL_WATER:
+      // T025 / FR-012, FR-014a: pump 0; heater force-off (descaleHeaterForceOff);
+      // OLED REFILL_WATER / HANDLE_CLOSED via updateOled; phasePulses kept;
+      // no DC0 / DC1 stays. New B3 → onPanelButton. No auto-timeout abort.
+      setPumpPercent(PUMP_OFF_PCT);
+      break;
+    case DESCALE_PHASE1: {
+      // T017 / FR-007, FR-006: ON DESCALE_PHASE1_ON_MS @ DESCALE_PUMP_PCT /
+      // OFF DESCALE_PHASE1_OFF_MS @ PUMP_OFF_PCT via millis() (no delay());
+      // PI holds DESCALE_PHASE1_TEMP_C through ON and OFF (descaleHeaterSetpoint).
+      // T018 / FR-009: accumulate phasePulses; ml via FLOW_PULSES_PER_ML.
+      // T019 / FR-010: no-flow armed only during ON → REFILL if vol < target.
+      // T020 / FR-011: volume ≥ target → WAIT_RINSE (priority over refill).
+      // T028 / US4: isSteamHandleOpen() MUST NOT stop pulses or force
+      // wait/success/refill — only volume / no-flow / FAULT (hydraulic path).
+      float sp = 0.0f;
+      if (descaleHeaterSetpoint(&sp)) {
+        activeTargetC = sp;
+      }
+
+      // T018: fold ISR → phasePulses; stamp lastFlowPulseMs on new pulses.
+      accumulateDescalePhasePulses();
+
+      // T020 / FR-011: volume ≥ target (incl. no-flow ON when already ≥ target)
+      // → WAIT_RINSE; priority over refill. No DC0 / DecalcTimer clear (FR-014).
+      if (descalePhaseVolumeReached()) {
+        enterDescaleWaitRinse();
+        break;
+      }
+
+      if (descaleSession.pulsePhase == DESCALE_PULSE_PHASE_ON &&
+          descaleSession.noFlowArmed &&
+          (now - descaleSession.lastFlowPulseMs) >= DESCALE_PHASE1_NOFLOW_MS) {
+        // T019 / FR-010: early empty → REFILL; keep pulses + DC1.
+        enterDescaleRefill();
+        break;
+      }
+
+      if (descaleSession.pulsePhase == DESCALE_PULSE_PHASE_ON) {
+        setPumpPercent(DESCALE_PUMP_PCT);
+        descaleSession.noFlowArmed = true;  // T019: arm only during ON
+        if ((now - descaleSession.pulsePhaseStartedMs) >= DESCALE_PHASE1_ON_MS) {
+          descaleSession.pulsePhase = DESCALE_PULSE_PHASE_OFF;
+          descaleSession.pulsePhaseStartedMs = now;
+          descaleSession.noFlowArmed = false;  // T019: pause no-flow on OFF
+          setPumpPercent(PUMP_OFF_PCT);
+        }
+      } else {
+        setPumpPercent(PUMP_OFF_PCT);
+        descaleSession.noFlowArmed = false;
+        if ((now - descaleSession.pulsePhaseStartedMs) >= DESCALE_PHASE1_OFF_MS) {
+          // T019 / FR-010: pause across OFF — restore ON-only elapsed so
+          // DESCALE_PHASE1_NOFLOW_MS can span multiple ON slices (defaults
+          // ON=500 < NOFLOW=1000). Hard reset would never trip with defaults.
+          const unsigned long offStarted = descaleSession.pulsePhaseStartedMs;
+          if (descaleSession.lastFlowPulseMs <= offStarted) {
+            const unsigned long elapsedAtOff =
+                offStarted - descaleSession.lastFlowPulseMs;
+            descaleSession.lastFlowPulseMs = now - elapsedAtOff;
+          } else {
+            descaleSession.lastFlowPulseMs = now;
+          }
+          descaleSession.pulsePhase = DESCALE_PULSE_PHASE_ON;
+          descaleSession.pulsePhaseStartedMs = now;
+          descaleSession.noFlowArmed = true;
+          setPumpPercent(DESCALE_PUMP_PCT);
+        }
+      }
+      break;
+    }
+    case DESCALE_PHASE2: {
+      // T023 / FR-008, FR-006: ON DESCALE_PHASE2_ON_MS @ DESCALE_PUMP_PCT /
+      // OFF DESCALE_PHASE2_OFF_MS @ PUMP_OFF_PCT via millis() (no delay());
+      // heater force-off entire phase 2 (descaleHeaterForceOff / updateHeaterControl).
+      // T024 / FR-012, FR-012a: accumulate phasePulses; no-flow armed only during
+      // ON → REFILL_WATER if vol < target (no DC0); volume ≥ target → success stub.
+      // OLED PHASE2_RUN via updateOled.
+      // T028 / US4: isSteamHandleOpen() MUST NOT stop pulses or force
+      // wait/success/refill — only volume / no-flow / FAULT (hydraulic path).
+
+      // T024: fold ISR → phasePulses; stamp lastFlowPulseMs on new pulses.
+      accumulateDescalePhasePulses();
+
+      // T024 / T026 / FR-012a, FR-013: volume ≥ target (incl. no-flow ON when
+      // already ≥ target) → success (DC0 clear + coolOrReady); priority over refill.
+      if (descalePhaseVolumeReached()) {
+        completeDescalePhase2Success();
+        break;
+      }
+
+      if (descaleSession.pulsePhase == DESCALE_PULSE_PHASE_ON &&
+          descaleSession.noFlowArmed &&
+          (now - descaleSession.lastFlowPulseMs) >= DESCALE_PHASE2_NOFLOW_MS) {
+        // T024 / FR-012: early empty → REFILL_WATER; keep pulses + DC1; no DC0.
+        enterDescaleRefillWater();
+        break;
+      }
+
+      if (descaleSession.pulsePhase == DESCALE_PULSE_PHASE_ON) {
+        setPumpPercent(DESCALE_PUMP_PCT);
+        descaleSession.noFlowArmed = true;  // T024: arm only during ON
+        if ((now - descaleSession.pulsePhaseStartedMs) >= DESCALE_PHASE2_ON_MS) {
+          descaleSession.pulsePhase = DESCALE_PULSE_PHASE_OFF;
+          descaleSession.pulsePhaseStartedMs = now;
+          descaleSession.noFlowArmed = false;  // T024: pause no-flow on OFF
+          setPumpPercent(PUMP_OFF_PCT);
+        }
+      } else {
+        setPumpPercent(PUMP_OFF_PCT);
+        descaleSession.noFlowArmed = false;
+        if ((now - descaleSession.pulsePhaseStartedMs) >= DESCALE_PHASE2_OFF_MS) {
+          // T024 / FR-012: pause across OFF — restore ON-only elapsed so
+          // DESCALE_PHASE2_NOFLOW_MS can span multiple ON slices (defaults
+          // ON=500 < NOFLOW=1500). Hard reset would never trip with defaults.
+          const unsigned long offStarted = descaleSession.pulsePhaseStartedMs;
+          if (descaleSession.lastFlowPulseMs <= offStarted) {
+            const unsigned long elapsedAtOff =
+                offStarted - descaleSession.lastFlowPulseMs;
+            descaleSession.lastFlowPulseMs = now - elapsedAtOff;
+          } else {
+            descaleSession.lastFlowPulseMs = now;
+          }
+          descaleSession.pulsePhase = DESCALE_PULSE_PHASE_ON;
+          descaleSession.pulsePhaseStartedMs = now;
+          descaleSession.noFlowArmed = true;
+          setPumpPercent(DESCALE_PUMP_PCT);
+        }
+      }
+      break;
+    }
     case FAULT:
       // FR-018: latch until power cycle — heater OFF, pump 0; OLED via updateOled;
       // no transition out (buttons ignored; coolOrReady refuses FAULT).
@@ -1485,9 +2324,13 @@ void handlePanelByte(char c) {
     if (linkLen > 0) {
       linkBuf[linkLen] = '\0';
 
+      // Ingress ≤ LINK_CODE_MAX_LEN: B1/B2/B3 press + R3 «пар» release
+      // (contracts/panel-hold-uart.md). Unknown codes → USB log only.
       if (linkLen == 2 && linkBuf[0] == 'B' &&
           (linkBuf[1] == '1' || linkBuf[1] == '2' || linkBuf[1] == '3')) {
         onPanelButton(linkBuf[1]);
+      } else if (linkLen == 2 && linkBuf[0] == 'R' && linkBuf[1] == '3') {
+        onPanelSteamRelease();
       } else {
         Serial.print(F("← panel (unknown) "));
         Serial.println(linkBuf);
@@ -1538,6 +2381,8 @@ void saveDecalcToEeprom() {
 }
 
 void loadDecalcFromEeprom() {
+  // FR-014 / T027: power cycle restores latch + accumulator — never auto-DC0 /
+  // never zero interval on boot (only first-boot / corrupt magic seeds empty).
   DecalcEepromLayout rec;
   EEPROM.get(DECALC_EEPROM_ADDR, rec);
   if (rec.magic != DECALC_EEPROM_MAGIC) {
@@ -1590,7 +2435,11 @@ void updateDecalcUptime(unsigned long now) {
 // ---------------------------------------------------------------------------
 // USB Serial service (FR-023 DC0 clear; optional DC1 force for stand)
 // ---------------------------------------------------------------------------
-// USB DC0 → panel DC0, clear latch, zero accumulator, persist (data-model DecalcTimer).
+// Shared DecalcTimer clear (USB + phase-2 success only).
+// FR-019 / T027: USB DC0 MUST still clear reminder without entering/running the
+// descaling program (no MachineState change here). FR-013 success reuses this.
+// FR-014: interrupt / FAULT / power cycle MUST NOT call this — only the two
+// callers below (USB handleServiceLine, completeDescalePhase2Success).
 void handleServiceDc0() {
   sendToPanel("DC0");
   dcLatched = false;
@@ -1610,6 +2459,7 @@ void handleServiceDc1() {
 }
 
 void handleServiceLine(const char *cmd) {
+  // FR-019 / T027: USB "DC0\n" → clear only (same as 001); does not start descale.
   if (strcmp(cmd, "DC0") == 0) {
     handleServiceDc0();
     return;
@@ -1789,7 +2639,7 @@ void loop() {
   // 2. Потенціометри: A0 → potPumpPercent, A1 → espressoTargetC / activeTargetC
   updatePots(now);
 
-  // 3. FSM tick (stubs until US handlers)
+  // 3. FSM tick — espresso/steam + DESCALE_* stubs (T006); US1–US3 fill handlers
   updateMachineState(now);
 
   // 4. Pump authority: поза brew/steam flow завжди PUMP_OFF_PCT

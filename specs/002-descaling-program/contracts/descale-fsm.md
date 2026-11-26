@@ -6,12 +6,13 @@
 
 | State | Entry actions | Invariants |
 | --- | --- | --- |
-| `DESCALE_HOLD` | Запам’ятати `pressMs`; опційно приглушити звичайну обробку short-`B3` | Помпа 0 %; рекомендовано ТЕН 0 % |
+| `DESCALE_HOLD` | Запам’ятати `pressMs`; опційно приглушити звичайну обробку short-`B3` | Помпа 0 %; ТЕН = штатний еспресо-ПІ (не force-off лише через hold) |
 | `DESCALE_PREP` | OLED prep; reset session flags | ТЕН 0 %; помпа 0 % |
-| `DESCALE_PHASE1` | `phasePulses=0` (або resume після refill — **не** нулити); старт pulse ON | ТЕН 0 %; імпульси phase1 @ `DESCALE_PUMP_PCT` |
-| `DESCALE_REFILL` | Помпа 0; OLED refill; **зберегти** `phasePulses` | ТЕН 0 % |
-| `DESCALE_WAIT_RINSE` | Помпа 0; OLED rinse prompt; `DC1` **не** скидати | ТЕН 0 % |
-| `DESCALE_PHASE2` | `phasePulses=0`; старт pulse ON | ТЕН 0 %; імпульси phase2 |
+| `DESCALE_PHASE1` | `phasePulses=0` (або resume після refill — **не** нулити); старт pulse ON **одразу**; уставка ТЕНа `DESCALE_PHASE1_TEMP_C` | ПІ → 53 °C; імпульси phase1 @ `DESCALE_PUMP_PCT`; **без** temp-gate |
+| `DESCALE_REFILL` | Помпа 0; OLED refill; **зберегти** `phasePulses`; ТЕН OFF | ТЕН 0 % |
+| `DESCALE_WAIT_RINSE` | Помпа 0; OLED rinse prompt; `DC1` **не** скидати; ТЕН OFF | ТЕН 0 % |
+| `DESCALE_PHASE2` | `phasePulses=0` (або resume після refill water); старт pulse ON; ТЕН OFF | ТЕН 0 %; імпульси phase2 |
+| `DESCALE_REFILL_WATER` | Помпа 0; OLED refill water; **зберегти** `phasePulses`; **без** `DC0` | ТЕН 0 % |
 
 ## Transitions
 
@@ -19,17 +20,20 @@
 | --- | --- | --- | --- |
 | `ESPRESSO_READY` / `ESPRESSO_HEAT` | `B3` press | `DESCALE_HOLD` | Не в brew/steam/`FAULT` |
 | `DESCALE_HOLD` | elapsed ≥ `DESCALE_HOLD_ENTER_MS` | `DESCALE_PREP` | Незалежно від `dcLatched` |
-| `DESCALE_HOLD` | `R3` і elapsed < `DESCALE_HOLD_PROMPT_MS` | попередній / steam path | Short press → `enterSteam()` з READY; з HEAT — за матрицею `001` (ігнор або deferred) |
+| `DESCALE_HOLD` | `R3` і elapsed < `DESCALE_HOLD_PROMPT_MS` | попередній / steam path | Short press → `enterSteam()` з READY; з HEAT — за матрицею `001` |
 | `DESCALE_HOLD` | `R3` і prompt ≤ elapsed < enter | `ESPRESSO_READY` / `ESPRESSO_HEAT` | Cancel countdown; без пару |
-| `DESCALE_PREP` | `B3` + handle open | `DESCALE_PHASE1` | |
+| `DESCALE_PREP` | `B3` + handle open | `DESCALE_PHASE1` | Помпа + ПІ 53 °C стартують разом |
 | `DESCALE_PREP` | `B3` + handle closed | stay | OLED handle closed |
-| `DESCALE_PHASE1` | no-flow ON ≥ P1 timeout **і** vol < target | `DESCALE_REFILL` | |
-| `DESCALE_PHASE1` | vol ≥ target (або no-flow при vol ≥ target) | `DESCALE_WAIT_RINSE` | Пріоритет над refill |
-| `DESCALE_REFILL` | `B3` + handle open | `DESCALE_PHASE1` | Resume pulses; volume kept |
+| `DESCALE_PHASE1` | no-flow ON ≥ P1 timeout **і** vol < target | `DESCALE_REFILL` | ТЕН → 0 % |
+| `DESCALE_PHASE1` | vol ≥ target (або no-flow при vol ≥ target) | `DESCALE_WAIT_RINSE` | Пріоритет над refill; ТЕН → 0 % |
+| `DESCALE_REFILL` | `B3` + handle open | `DESCALE_PHASE1` | Resume pulses + уставка 53 °C; volume kept |
 | `DESCALE_REFILL` | `B3` + handle closed | stay | OLED handle closed |
-| `DESCALE_WAIT_RINSE` | `B3` + handle open | `DESCALE_PHASE2` | |
+| `DESCALE_WAIT_RINSE` | `B3` + handle open | `DESCALE_PHASE2` | ТЕН лишається 0 % |
 | `DESCALE_WAIT_RINSE` | `B3` + handle closed | stay | OLED handle closed |
-| `DESCALE_PHASE2` | vol ≥ target **або** no-flow ON ≥ P2 timeout | success exit | `DC0` effect → espresso path |
+| `DESCALE_PHASE2` | no-flow ON ≥ P2 timeout **і** vol < target | `DESCALE_REFILL_WATER` | **без** `DC0` |
+| `DESCALE_PHASE2` | vol ≥ target (або no-flow при vol ≥ target) | success exit | `DC0` effect → espresso path |
+| `DESCALE_REFILL_WATER` | `B3` + handle open | `DESCALE_PHASE2` | Resume pulses; volume kept; ТЕН 0 % |
+| `DESCALE_REFILL_WATER` | `B3` + handle closed | stay | OLED handle closed |
 | Any `DESCALE_*` | fault / invalid thermocouple / cutoff | `FAULT` | ТЕН/помпа OFF; **без** `DC0` |
 | Any `DESCALE_*` | power loss | (cold start) | Програма не resume; latch як був |
 
@@ -43,16 +47,19 @@
 | `DESCALE_REFILL` | ignore | resume P1 if open | ignore | n/a |
 | `DESCALE_WAIT_RINSE` | ignore | start P2 if open | ignore | n/a |
 | `DESCALE_PHASE2` | ignore | ignore | ignore | continue pulses |
+| `DESCALE_REFILL_WATER` | ignore | resume P2 if open | ignore | n/a |
 
 ## Pump / heater gates
 
-- `heaterForceOff` == true для всіх станів від `DESCALE_PREP`…`DESCALE_PHASE2` (і рекомендовано `DESCALE_HOLD`).
+- `heaterForceOff` == true для `DESCALE_PREP`, `DESCALE_REFILL`, `DESCALE_WAIT_RINSE`, `DESCALE_PHASE2`, `DESCALE_REFILL_WATER`.
+- `heaterSetpoint` == `DESCALE_PHASE1_TEMP_C` (53 °C) **лише** в `DESCALE_PHASE1` (ПІ з `001`; без очікування уставки перед помпою).
+- `DESCALE_HOLD` / countdown: не підміняти еспресо-уставку лише через жест hold.
 - `pumpMayRun` == true лише в `DESCALE_PHASE1` і `DESCALE_PHASE2` під час pulse ON.
 - Не надсилати `HS*`/`SS*`/`P1*`/`P2*` під час `DESCALE_*` (крім можливо нейтралізації попередніх LED при вході — імплементація MAY послати `SS0`/`HS0`/`LT0` один раз при вході в prep, якщо потрібно зняти «паровий» LED; не обов’язково для FR).
 
 ## Success exit sequence
 
-1. Помпа 0 %.
+1. Помпа 0 %; ТЕН 0 % (вже був у фазі 2).
 2. Виклик спільного clear: `sendToPanel("DC0")` + `dcLatched=false` + `accumulatedOnSeconds=0` + EEPROM save (як USB `DC0`).
 3. Перехід у `ESPRESSO_READY` або `ESPRESSO_HEAT` за температурою/уставкою еспресо (без парової цілі).
 
@@ -63,3 +70,4 @@
 | Hold enter 10 s | ±200 мс (SC-001) |
 | Phase pulses | ±50 мс (SC-003) |
 | `DC0` after phase 2 complete | ≤1 с (SC-005) |
+| Phase 1 setpoint | `DESCALE_PHASE1_TEMP_C` = 53 (стенд за каліброваним сенсором; NTC MAY ± кілька °C) |

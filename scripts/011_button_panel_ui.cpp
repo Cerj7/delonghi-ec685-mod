@@ -13,8 +13,10 @@
 //
 // Двобічний UART з основною Nano (контракт — docs/button-panel-protocol.md):
 //   D6 TX → D9 основної,  D5 RX ← D8 основної,  19200 8N1
-//   Панель → основна: B1 / B2 / B3  (фронт натискання)
+//   Панель → основна: B1 / B2 / B3  (фронт натискання);
+//                     R3            (фронт відпускання «пар»; B1/B2 без release)
 //   Основна → панель: HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 LT1 LT0 DC1 DC0
+//   Hold 1 с / 10 с вимірює лише основна — панель не шле H3/D3.
 //
 // LED: початково всі вимкнені. Кілька LED одночасно — мультиплексування
 // по одному на такт сканування (~5 мс). Мигання — 300 мс on/off.
@@ -119,7 +121,9 @@ void setEspressoLeds(LedVis mode);
 uint8_t readRawButtons();
 void scanButtons();
 void handlePress(uint8_t btn);
+void handleRelease(uint8_t btn);
 void sendButtonEvent(uint8_t btn);
+void sendSteamRelease();
 void handleLinkByte(char c);
 void executeLinkCommand(const char *cmd);
 void handlePcSerial();
@@ -309,6 +313,7 @@ void scanButtons() {
       handlePress(i);
     } else if (buttonState[i] && releaseStreak[i] >= DEBOUNCE_SAMPLES) {
       buttonState[i] = false;
+      handleRelease(i);
     }
   }
 
@@ -325,9 +330,28 @@ void handlePress(uint8_t btn) {
   sendButtonEvent(btn);
 }
 
+void handleRelease(uint8_t btn) {
+  // B1/B2: v1 без обов'язкового release-коду (panel-hold-uart.md)
+  if (btn != BTN_STEAM) return;
+
+  Serial.print(F("["));
+  Serial.print(millis());
+  Serial.print(F(" ms] BTN «"));
+  Serial.print(BUTTONS[btn].name);
+  Serial.println(F("» відпущено → лінк"));
+
+  sendSteamRelease();
+}
+
 void sendButtonEvent(uint8_t btn) {
   link.write('B');
   link.write(BUTTONS[btn].code);
+  link.write('\n');
+}
+
+void sendSteamRelease() {
+  link.write('R');
+  link.write('3');
   link.write('\n');
 }
 
@@ -491,6 +515,6 @@ void printStatus() {
 }
 
 void printHelp() {
-  Serial.println(F("Лінк 19200: B1/B2/B3 → основна; ← HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 LT1 LT0 DC1 DC0"));
+  Serial.println(F("Лінк 19200: B1/B2/B3 + R3(пар) → основна; ← HE1 HE0 P11 P10 P21 P20 HS1 HS0 SS1 SS0 LT1 LT0 DC1 DC0"));
   Serial.println(F("USB: ті самі коди (локально) | S — статус | ? — довідка"));
 }
